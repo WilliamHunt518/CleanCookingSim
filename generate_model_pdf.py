@@ -2,12 +2,11 @@
 current parameter value. Uses only matplotlib (already a dependency) via its
 multi-page PdfPages backend -- no new dependency for a one-off doc generator.
 
-Run:  python generate_model_pdf.py   ->  writes out/model_reference.pdf
+Run:  python generate_model_pdf.py   ->  writes model_reference.pdf (repo root)
 """
 from __future__ import annotations
 
 import datetime
-import os
 import textwrap
 
 import matplotlib.pyplot as plt
@@ -85,7 +84,7 @@ def _render_flow(pdf: PdfPages, items: list[tuple[str, object]], page_title: str
                               transform=state["ax"].transAxes)
             state["y"] -= 0.045
         elif kind == "para":
-            wrapped = _wrapped(payload, 108)
+            wrapped = _wrapped(payload, 96)
             n_lines = wrapped.count("\n") + 1
             need = n_lines * 0.0235 + 0.015
             if state["y"] - need < 0.06:
@@ -123,22 +122,21 @@ def notation_page(pdf: PdfPages) -> None:
         (r"$\kappa$", "scalar", r"Weight of $\tau_t$ in hunger"),
         (r"$w(t)$", r"$\mathbb{R}$", "Baseline hazard logit: time-of-day profile (3 Gaussian bumps)"),
         (r"$\eta_t,\ \eta_k$", r"$\mathbb{R}$", "Scenario offsets: extra timing bias / extra meal-appeal"),
-        (r"$\lambda_{p,s}$", r"$\mathbb{R}$", "Persona $p$'s hazard bias at stage $s$"),
+        (r"$\lambda_{p,s}$", r"$\mathbb{R}$", "Per-(persona,stage) hazard bias -- shapes WHEN a persona cooks"),
         (r"$\alpha_0$", "scalar", "Weight of hunger in the hazard logit"),
         (r"$\Delta$", r"$(0,1]$", "Hazard-to-probability scale (also the max per-block probability)"),
         (r"$\ell_t$", r"$\mathbb{R}$", "Hazard logit"),
         (r"$q_t$", r"$[0,\Delta]$", "Probability the agent starts cooking in block $t$"),
         (r"$K$", "integer", "Number of meals on the menu"),
         (r"$\mathbf{z}_k$", r"$\mathbb{R}^8$", "Meal $k$'s attribute vector (Table 2)"),
-        (r"$\boldsymbol{\gamma}$", r"$\mathbb{R}^8$", "Agent's taste-weight vector (persona mean + individual noise)"),
+        (r"$\boldsymbol{\gamma}$", r"$\mathbb{R}^8$", "Agent's own weights on the 8 meal attributes -- shapes WHICH meal it picks"),
         (r"$\gamma_{\mathrm{cost}}$", "scalar", "Agent's price sensitivity"),
         (r"$p(t)$", r"$\mathbb{R}_{\geq 0}$", "Grid tariff price at time $t$ (currency/kWh)"),
         (r"$e_k$", r"$\mathbb{R}_{\geq 0}$", "Meal $k$'s grid energy draw (kWh); 0 for fire-only meals"),
         (r"$\alpha_k$", r"$\mathbb{R}$", "Meal $k$'s hunger-boost coefficient"),
         (r"$u_k$", r"$\mathbb{R}$", "Meal $k$'s utility"),
         (r"$P(k)$", r"$[0,1]$", "Probability of choosing meal $k$, conditional on firing"),
-        (r"$\pi$", "tariff", "One candidate day-ahead tariff (flat / evening-peak / solar-following)"),
-        (r"$\Pi$", "scalar", "Exceedance-penalty weight in scoring"),
+        (r"$\pi$", "tariff", "One candidate day-ahead tariff: a full price path $p(t)$, announced at $t=0$"),
     ]
     table = ax.table(cellText=[[s, d, m] for s, d, m in rows],
                       colLabels=["Symbol", "Domain", "Meaning"],
@@ -181,6 +179,13 @@ def model_pages(pdf: PdfPages) -> None:
                  "bias, and a hunger term:"),
         ("eq", r"$\ell_t = w(t) + \eta_t + \lambda_{p,s(t)} + \alpha_0 H_t$"),
         ("para",
+         "$\\lambda_{p,s}$ is a fixed bias, specific to both the agent's persona $p$ (household, school "
+         "or kiosk) and the currently-active stage $s$, added directly into the logit -- it does not "
+         "depend on the meal chosen, only on who is cooking and when. It is how a persona's whole daily "
+         "rhythm is shaped without writing separate code per persona: e.g. giving school a strongly "
+         "negative $\\lambda$ at breakfast and dinner and a strongly positive one at lunch makes it fire "
+         "almost exclusively around lunchtime, while household keeps $\\lambda_{p,s}=0$ at every stage."),
+        ("para",
          "and $w(t)$ relaxes to an overnight floor $b$ away from three Gaussian bumps, one per meal "
          "stage $s\\in\\{B,L,D\\}$ with centre $c_s$, peak height $\\beta_s$ and shared width $\\sigma_w$:"),
         ("eq", r"$w(t) = b + \sum_{s} (\beta_s - b)\, \exp\left(-\frac{1}{2}\left(\frac{t-c_s}{\sigma_w}\right)^{2}\right)$", 0.085),
@@ -202,11 +207,16 @@ def model_pages(pdf: PdfPages) -> None:
         ("eq", r"$u_k = \boldsymbol{\gamma}^{\top}\mathbf{z}_k + \eta_k - \gamma_{\mathrm{cost}}\,p(t)\,e_k + \alpha_k H_t$"),
         ("eq", r"$P(k) = \dfrac{\exp(u_k)}{\sum_{j=1}^{K}\exp(u_j)}$", 0.1),
         ("para",
-         "$\\mathbf{z}_k$ is meal $k$'s 8-dimensional attribute vector -- taste, tradition, kid-acceptance, "
-         "batch potential, ingredient cost, prep labour, kcal, fuel cost (Table 2) -- and "
-         "$\\boldsymbol{\\gamma}$ is the agent's persona-and-individual taste-weight vector over the same "
-         "8 dimensions. $e_k=0$ for fire-only meals, so $p(t)$ never affects their utility: this is the "
-         "single mechanism by which the grid tariff can push demand toward or away from wood."),
+         "$\\mathbf{z}_k$ is meal $k$'s fixed 8-dimensional attribute vector -- taste, tradition, "
+         "kid-acceptance, batch potential, ingredient cost, prep labour, kcal, fuel cost (Table 2) -- the "
+         "same for every agent. $\\boldsymbol{\\gamma}$ is the opposite: it belongs to the agent, not the "
+         "meal, and says how much that agent personally cares about each of those 8 attributes (e.g. a "
+         "large positive weight on tradition, a negative weight on ingredient cost). Every persona has "
+         "its own mean $\\boldsymbol{\\gamma}$ (Table 3), and every individual agent draws its own "
+         "$\\boldsymbol{\\gamma}$ once at initialisation as a small random perturbation around its "
+         "persona's mean -- so agents of the same persona behave similarly but not identically. "
+         "$e_k=0$ for fire-only meals, so $p(t)$ never affects their utility: this is the single "
+         "mechanism by which the grid tariff can push demand toward or away from wood."),
         ("para",
          f"Current calibration: $\\alpha_k$ = ALPHA_SCALE $\\times\\,\\mathrm{{kcal}}_k$ / KCAL_MAX, with "
          f"ALPHA_SCALE = {config.ALPHA_SCALE:g}. ing_cost, prep_min, kcal and fuel-cost are each "
@@ -216,19 +226,22 @@ def model_pages(pdf: PdfPages) -> None:
          f"gamma-weighted feature sits on a comparable scale."),
         ("space", 0.01),
 
-        ("heading", "4. Demand, tariffs and scoring"),
+        ("heading", "4. Demand and tariffs"),
         ("para",
          "Every cooking event contributes a kW profile (a boxcar of height $e_k/D$ over its sampled "
-         "duration $D$, by default) to the aggregate demand curve. A tariff $\\pi$ is a price path "
-         "$p(t)$ announced at $t=0$; three candidate shapes (flat, evening-peak, solar-following) are "
-         "swept, each normalised to the same time-average price. Each is scored, over $R$ independent "
-         "Monte Carlo days on the same fixed population, by"),
-        ("eq", r"$\mathrm{Score}(\pi) = \mathrm{WoodShare}(\pi) + \Pi \cdot P_{\mathrm{exceed}}(\pi)$"),
+         "duration $D$, by default) to the aggregate demand curve. A tariff $\\pi$ is simply a price "
+         "path $p(t)$ over the $T$ blocks of the day, announced in full at $t=0$ (agents never see "
+         "future prices before they're announced, but the whole path is fixed and known from block 0 "
+         "onward). Three candidate price paths are defined:"),
+        ("eq", r"$\mathrm{flat}:\quad p(t) = \bar p$", 0.05),
+        ("eq", r"$\mathrm{evening\_peak}:\quad p(t) = p_{lo} + (p_{hi}-p_{lo})\cdot\mathbb{1}[t \in W_{peak}]$", 0.05),
+        ("eq", r"$\mathrm{solar\_following}:\quad p(t) = p_{hi} - (p_{hi}-p_{lo})\cdot \dfrac{PV(t)}{\max_t PV(t)}$", 0.078),
         ("para",
-         "where $\\mathrm{WoodShare}(\\pi)$ is the fraction of all meals cooked on fire across every "
-         f"run, $P_{{\\mathrm{{exceed}}}}(\\pi)$ is the fraction of runs in which aggregate demand ever "
-         f"exceeds the grid cap, and $\\Pi={config.SCORING.PI:g}$ (currently $R={config.SCORING.R}$). "
-         "Lower score wins."),
+         "where $\\bar p$ is a common target average price, $p_{lo}/p_{hi}$ are low/high price levels, "
+         "$W_{peak}$ is a fixed evening window, and $PV(t)$ is a stylised solar-generation curve used "
+         "only to shape this one tariff (it is not part of any agent's decision). Every candidate is "
+         "then rescaled by a constant factor so its own time-average equals $\\bar p$ exactly -- this "
+         "keeps the comparison about the shape of the price over the day, not its overall level."),
     ]
     _render_flow(pdf, items, "The model")
 
@@ -339,8 +352,7 @@ def glossary_pages(pdf: PdfPages) -> None:
         plt.close(fig)
 
 
-def main(out_path: str = "out/model_reference.pdf") -> None:
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+def main(out_path: str = "model_reference.pdf") -> None:
     with PdfPages(out_path) as pdf:
         title_page(pdf)
         notation_page(pdf)
