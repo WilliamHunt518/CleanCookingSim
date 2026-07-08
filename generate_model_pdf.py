@@ -57,101 +57,180 @@ def title_page(pdf: PdfPages) -> None:
     plt.close(fig)
 
 
-def overview_page(pdf: PdfPages) -> None:
+def _render_flow(pdf: PdfPages, items: list[tuple[str, object]], page_title: str) -> None:
+    """Lay out a mixed heading/paragraph/equation/table stream, paginating as needed."""
+    state = {"fig": None, "ax": None, "y": 1.0}
+
+    def start_page(continued: bool = False):
+        fig, ax = _new_page()
+        title = f"{page_title} (cont.)" if continued else page_title
+        ax.text(0, 1.0, title, fontsize=16, fontweight="bold", va="top", transform=ax.transAxes)
+        state["fig"], state["ax"], state["y"] = fig, ax, 1.0 - 0.055
+
+    def new_page():
+        pdf.savefig(state["fig"])
+        plt.close(state["fig"])
+        start_page(continued=True)
+
+    start_page()
+    for item in items:
+        kind, payload = item[0], item[1]
+        eq_height = item[2] if kind == "eq" and len(item) > 2 else 0.065
+        ax = state["ax"]
+        if kind == "heading":
+            if state["y"] - 0.05 < 0.06:
+                new_page()
+                ax = state["ax"]
+            state["ax"].text(0, state["y"], payload, fontsize=12.5, fontweight="bold", va="top",
+                              transform=state["ax"].transAxes)
+            state["y"] -= 0.045
+        elif kind == "para":
+            wrapped = _wrapped(payload, 108)
+            n_lines = wrapped.count("\n") + 1
+            need = n_lines * 0.0235 + 0.015
+            if state["y"] - need < 0.06:
+                new_page()
+            state["ax"].text(0, state["y"], wrapped, fontsize=10.3, va="top",
+                              transform=state["ax"].transAxes)
+            state["y"] -= need
+        elif kind == "eq":
+            if state["y"] - eq_height < 0.06:
+                new_page()
+            state["ax"].text(0.5, state["y"], payload, fontsize=14, va="top", ha="center",
+                              transform=state["ax"].transAxes)
+            state["y"] -= eq_height
+        elif kind == "space":
+            state["y"] -= payload
+    pdf.savefig(state["fig"])
+    plt.close(state["fig"])
+
+
+def notation_page(pdf: PdfPages) -> None:
     fig, ax = _new_page()
-    ax.text(0, 1.0, "How the model works", fontsize=16, fontweight="bold",
-            transform=ax.transAxes, va="top")
+    ax.text(0, 1.0, "Notation", fontsize=16, fontweight="bold", va="top", transform=ax.transAxes)
+    ax.text(0, 0.955,
+            "Every symbol used in the equations on the following pages, in order of first use.",
+            fontsize=10, va="top", transform=ax.transAxes)
 
-    body = """
-Each agent (household / school / kiosk) is a discrete-time Markov chain stepped
-through one day in 5-minute blocks. Per-block state:
-
-  t     -- block index, 0..T-1
-  h     -- [h_B, h_L, h_D], each 0 (not yet eaten) or the 1-based index of the
-            meal eaten at that stage (breakfast/lunch/dinner)
-  tau   -- hours since the agent last ate (capped)
-
-At every block, each agent goes through three steps:
-
-  Stage 1 (fire) -- a hazard draw decides whether the agent starts cooking
-      this block, IF the currently-active meal stage is still open (inside
-      its clock-time window) AND that stage's slot in h is still empty.
-
-  Stage 2 (which) -- if it fires, the agent picks ONE meal from the menu via
-      a softmax over each meal's utility. The menu mixes electric meals
-      (grid energy, subject to the swept tariff) and fire/wood meals (zero
-      grid energy -- immune to the tariff, but not free: they carry a
-      charcoal-cost disutility instead).
-
-  Stage 3 (update) -- the chosen meal is written into h, tau resets to 0,
-      and a cooking event (start block, meal, agent) is recorded. Recorded
-      events feed the aggregate demand curve (via each meal's kW profile)
-      and the wood-share / exceedance scoring.
-
-A day-ahead TARIFF is a price(t) array announced at t=0. Three candidate
-shapes are swept (flat / evening-peak / solar-following), all normalised to
-the same time-average price, and scored by:
-
-  score(tariff) = wood_share + PI * P_exceed
-
-where wood_share is the fraction of all meals cooked on fire across the
-whole Monte Carlo sweep, and P_exceed is the fraction of simulated days on
-which aggregate demand ever exceeded the grid cap.
-"""
-    ax.text(0, 0.94, body.strip("\n"), fontsize=10, family="monospace", va="top",
-            transform=ax.transAxes)
+    rows = [
+        (r"$t$", r"$\{0,\dots,T-1\}$", "Discrete block index within one simulated day"),
+        (r"$s(t)$", r"$\{B,L,D\}$", "Active meal stage (breakfast/lunch/dinner) at time $t$ (clock-time only)"),
+        (r"$\mathbf{h}_t$", r"$\{0,\dots,K\}^3$", r"Meal-slot state $(h_t^B,h_t^L,h_t^D)$; 0 = not yet eaten, else 1-based meal index"),
+        (r"$\tau_t$", r"$[0,\tau_{\max}]$", "Hours since the agent last ate"),
+        (r"$n_t$", r"$\{0,1,2,3\}$", r"Meals eaten so far today, $n_t=|\{s:h_t^s\neq 0\}|$"),
+        (r"$\bar n(t)$", r"$\{0,1,2,3\}$", "Step function: meals a schedule-following agent should have eaten by $t$"),
+        (r"$H_t$", r"$\mathbb{R}_{\geq 0}$", "Hunger"),
+        (r"$\kappa$", "scalar", r"Weight of $\tau_t$ in hunger"),
+        (r"$w(t)$", r"$\mathbb{R}$", "Baseline hazard logit: time-of-day profile (3 Gaussian bumps)"),
+        (r"$\eta_t,\ \eta_k$", r"$\mathbb{R}$", "Scenario offsets: extra timing bias / extra meal-appeal"),
+        (r"$\lambda_{p,s}$", r"$\mathbb{R}$", "Persona $p$'s hazard bias at stage $s$"),
+        (r"$\alpha_0$", "scalar", "Weight of hunger in the hazard logit"),
+        (r"$\Delta$", r"$(0,1]$", "Hazard-to-probability scale (also the max per-block probability)"),
+        (r"$\ell_t$", r"$\mathbb{R}$", "Hazard logit"),
+        (r"$q_t$", r"$[0,\Delta]$", "Probability the agent starts cooking in block $t$"),
+        (r"$K$", "integer", "Number of meals on the menu"),
+        (r"$\mathbf{z}_k$", r"$\mathbb{R}^8$", "Meal $k$'s attribute vector (Table 2)"),
+        (r"$\boldsymbol{\gamma}$", r"$\mathbb{R}^8$", "Agent's taste-weight vector (persona mean + individual noise)"),
+        (r"$\gamma_{\mathrm{cost}}$", "scalar", "Agent's price sensitivity"),
+        (r"$p(t)$", r"$\mathbb{R}_{\geq 0}$", "Grid tariff price at time $t$ (currency/kWh)"),
+        (r"$e_k$", r"$\mathbb{R}_{\geq 0}$", "Meal $k$'s grid energy draw (kWh); 0 for fire-only meals"),
+        (r"$\alpha_k$", r"$\mathbb{R}$", "Meal $k$'s hunger-boost coefficient"),
+        (r"$u_k$", r"$\mathbb{R}$", "Meal $k$'s utility"),
+        (r"$P(k)$", r"$[0,1]$", "Probability of choosing meal $k$, conditional on firing"),
+        (r"$\pi$", "tariff", "One candidate day-ahead tariff (flat / evening-peak / solar-following)"),
+        (r"$\Pi$", "scalar", "Exceedance-penalty weight in scoring"),
+    ]
+    table = ax.table(cellText=[[s, d, m] for s, d, m in rows],
+                      colLabels=["Symbol", "Domain", "Meaning"],
+                      loc="upper left", cellLoc="left", colLoc="left",
+                      colWidths=[0.16, 0.16, 0.68], bbox=[0, 0, 1, 0.90])
+    table.auto_set_font_size(False)
+    table.set_fontsize(9.5)
+    for (r, c), cell in table.get_celld().items():
+        cell.set_text_props(ha="left")
+        if r == 0:
+            cell.set_text_props(fontweight="bold", ha="left")
+        cell.PAD = 0.01
     pdf.savefig(fig)
     plt.close(fig)
 
 
-def equations_page(pdf: PdfPages) -> None:
-    fig, ax = _new_page()
-    ax.text(0, 1.0, "The equations, with current values substituted", fontsize=16,
-            fontweight="bold", transform=ax.transAxes, va="top")
+def model_pages(pdf: PdfPages) -> None:
+    bh, bc, sw = config.TIMING.bump_heights, config.TIMING.bump_centers_hr, config.TIMING.stage_windows_hr
+    items: list[tuple[str, object]] = [
+        ("heading", "1. State space"),
+        ("para",
+         "Each agent is simulated as an independent discrete-time stochastic process over one day, "
+         "divided into $T$ blocks of $\\Delta t_{\\mathrm{blk}}$ minutes. The agent's state at block "
+         "$t$ is the triple"),
+        ("eq", r"$s_t = (t,\ \mathbf{h}_t,\ \tau_t)$"),
+        ("para",
+         "where $\\mathbf{h}_t=(h_t^{B},h_t^{L},h_t^{D})\\in\\{0,\\dots,K\\}^3$ records which menu item "
+         "(if any) has been eaten at each of the three meal stages, and $\\tau_t$ is the number of hours "
+         "since the agent last ate. Let $n_t=|\\{s:h_t^s\\neq 0\\}|$ be the number of meals eaten so far "
+         "today. Hunger, which drives both stages below, is"),
+        ("eq", r"$H_t = \max\left(0,\ \bar n(t) - n_t\right) + \kappa\,\tau_t$"),
+        ("space", 0.01),
 
-    bh = config.TIMING.bump_heights
-    bc = config.TIMING.bump_centers_hr
-    sw = config.TIMING.stage_windows_hr
-    text = f"""
-Hunger (drives both stages):
-  n      = count of nonzero entries of h
-  hunger = max(0, nbar(t) - n) + kappa * tau
-           kappa = {config.HUNGER.kappa:g}
-           nbar(t) = 0 before {config.HUNGER.nbar_step_times_hr['1']:g}h, 1 before {config.HUNGER.nbar_step_times_hr['2']:g}h,
-                     2 before {config.HUNGER.nbar_step_times_hr['3']:g}h, else 3
+        ("heading", "2. Stage 1 -- cooking hazard"),
+        ("para",
+         "At each block, if the active stage $s(t)$ still has an empty slot ($h_t^{s(t)}=0$), the agent "
+         "begins cooking this block with probability"),
+        ("eq", r"$q_t = \Delta\cdot\sigma(\ell_t), \qquad \sigma(x)=\dfrac{1}{1+e^{-x}}$", 0.078),
+        ("para", "where the hazard logit sums a time-of-day baseline, a scenario offset, a persona/stage "
+                 "bias, and a hunger term:"),
+        ("eq", r"$\ell_t = w(t) + \eta_t + \lambda_{p,s(t)} + \alpha_0 H_t$"),
+        ("para",
+         "and $w(t)$ relaxes to an overnight floor $b$ away from three Gaussian bumps, one per meal "
+         "stage $s\\in\\{B,L,D\\}$ with centre $c_s$, peak height $\\beta_s$ and shared width $\\sigma_w$:"),
+        ("eq", r"$w(t) = b + \sum_{s} (\beta_s - b)\, \exp\left(-\frac{1}{2}\left(\frac{t-c_s}{\sigma_w}\right)^{2}\right)$", 0.085),
+        ("para",
+         f"Current calibration: $b={config.TIMING.overnight_base_logit:g}$, "
+         f"$\\sigma_w={config.TIMING.bump_width_hr:g}$h; "
+         f"$(c_B,\\beta_B)=({bc['breakfast']:g}\\mathrm{{h}}, {bh['breakfast']:g})$, "
+         f"$(c_L,\\beta_L)=({bc['lunch']:g}\\mathrm{{h}}, {bh['lunch']:g})$, "
+         f"$(c_D,\\beta_D)=({bc['dinner']:g}\\mathrm{{h}}, {bh['dinner']:g})$; "
+         f"$\\alpha_0={config.HUNGER.alpha0:g}$, $\\kappa={config.HUNGER.kappa:g}$, "
+         f"$\\Delta={config.TIMING.DELTA:g}$. Stage $s$ may only fire inside its own clock-time window "
+         f"(breakfast {sw['breakfast']}, lunch {sw['lunch']}, dinner {sw['dinner']}, all in 24h clock hours)."),
+        ("space", 0.01),
 
-Stage 1 -- firing hazard:
-  w(t)   = overnight_base + sum over stages of (height_s - overnight_base)
-           * exp(-0.5 * ((t - center_s) / width)^2)
-           overnight_base = {config.TIMING.overnight_base_logit:g}, width = {config.TIMING.bump_width_hr:g}h
-           breakfast: center={bc['breakfast']:g}h height={bh['breakfast']:g}   window={sw['breakfast']}
-           lunch:     center={bc['lunch']:g}h height={bh['lunch']:g}   window={sw['lunch']}
-           dinner:    center={bc['dinner']:g}h height={bh['dinner']:g}   window={sw['dinner']}
-  logit  = w(t) + eta_t(t) + lam[persona, stage] + alpha0 * hunger
-           alpha0 = {config.HUNGER.alpha0:g}
-  q      = sigmoid(logit) * DELTA          DELTA = {config.TIMING.DELTA:g}
-           (q is the probability this agent starts cooking in THIS block;
-            only evaluated if the active stage's slot in h is still empty)
+        ("heading", "3. Stage 2 -- meal choice"),
+        ("para",
+         "Conditional on firing, the agent chooses meal $k\\in\\{1,\\dots,K\\}$ via a multinomial-logit "
+         "(softmax) discrete-choice model over utilities"),
+        ("eq", r"$u_k = \boldsymbol{\gamma}^{\top}\mathbf{z}_k + \eta_k - \gamma_{\mathrm{cost}}\,p(t)\,e_k + \alpha_k H_t$"),
+        ("eq", r"$P(k) = \dfrac{\exp(u_k)}{\sum_{j=1}^{K}\exp(u_j)}$", 0.1),
+        ("para",
+         "$\\mathbf{z}_k$ is meal $k$'s 8-dimensional attribute vector -- taste, tradition, kid-acceptance, "
+         "batch potential, ingredient cost, prep labour, kcal, fuel cost (Table 2) -- and "
+         "$\\boldsymbol{\\gamma}$ is the agent's persona-and-individual taste-weight vector over the same "
+         "8 dimensions. $e_k=0$ for fire-only meals, so $p(t)$ never affects their utility: this is the "
+         "single mechanism by which the grid tariff can push demand toward or away from wood."),
+        ("para",
+         f"Current calibration: $\\alpha_k$ = ALPHA_SCALE $\\times\\,\\mathrm{{kcal}}_k$ / KCAL_MAX, with "
+         f"ALPHA_SCALE = {config.ALPHA_SCALE:g}. ing_cost, prep_min, kcal and fuel-cost are each "
+         f"normalised to roughly $[0,1]$ by dividing by a reference maximum "
+         f"(ING_COST_MAX_KES = {config.ING_COST_MAX_KES:g}, PREP_MIN_MAX = {config.PREP_MIN_MAX:g}, "
+         f"KCAL_MAX = {config.KCAL_MAX:g}, CHARCOAL_KES_MAX = {config.CHARCOAL_KES_MAX:g}) so every "
+         f"gamma-weighted feature sits on a comparable scale."),
+        ("space", 0.01),
 
-Stage 2 -- which meal (softmax choice), for each meal k with attributes z_k:
-  z_k    = [{', '.join(ATTR_ORDER)}]
-           (ing_cost/prep_min/kcal/fuelcost are normalised to ~0-1 by dividing
-            by ING_COST_MAX_KES={config.ING_COST_MAX_KES:g}, PREP_MIN_MAX={config.PREP_MIN_MAX:g},
-            KCAL_MAX={config.KCAL_MAX:g}, CHARCOAL_KES_MAX={config.CHARCOAL_KES_MAX:g} respectively;
-            fuelcost is 0 for electric meals, charcoal_kes_norm for fire-only meals)
-  alpha_k = ALPHA_SCALE * kcal_norm_k        ALPHA_SCALE = {config.ALPHA_SCALE:g}
-  u_k    = gamma . z_k + eta_k - gamma_cost * price(t) * e_k + alpha_k * hunger
-  P(k)   = exp(u_k) / sum_j exp(u_j)          (e_k = 0 for fire-only meals,
-                                                so price(t) never affects them)
-
-Scoring:
-  score(tariff) = wood_share + PI * P_exceed        PI = {config.SCORING.PI:g}
-  Monte Carlo:  R = {config.SCORING.R} independent days per tariff, fresh dice, same agents.
-"""
-    ax.text(0, 0.94, text.strip("\n"), fontsize=8.7, family="monospace", va="top",
-            transform=ax.transAxes)
-    pdf.savefig(fig)
-    plt.close(fig)
+        ("heading", "4. Demand, tariffs and scoring"),
+        ("para",
+         "Every cooking event contributes a kW profile (a boxcar of height $e_k/D$ over its sampled "
+         "duration $D$, by default) to the aggregate demand curve. A tariff $\\pi$ is a price path "
+         "$p(t)$ announced at $t=0$; three candidate shapes (flat, evening-peak, solar-following) are "
+         "swept, each normalised to the same time-average price. Each is scored, over $R$ independent "
+         "Monte Carlo days on the same fixed population, by"),
+        ("eq", r"$\mathrm{Score}(\pi) = \mathrm{WoodShare}(\pi) + \Pi \cdot P_{\mathrm{exceed}}(\pi)$"),
+        ("para",
+         "where $\\mathrm{WoodShare}(\\pi)$ is the fraction of all meals cooked on fire across every "
+         f"run, $P_{{\\mathrm{{exceed}}}}(\\pi)$ is the fraction of runs in which aggregate demand ever "
+         f"exceeds the grid cap, and $\\Pi={config.SCORING.PI:g}$ (currently $R={config.SCORING.R}$). "
+         "Lower score wins."),
+    ]
+    _render_flow(pdf, items, "The model")
 
 
 def persona_page(pdf: PdfPages) -> None:
@@ -177,7 +256,12 @@ def persona_page(pdf: PdfPages) -> None:
         else:
             lines.append("  (no gamma offsets)")
         lam_over = config.PERSONAS.persona_lam.get(persona, {})
-        lines.append(f"  lam (per-stage hazard REPLACEMENT, not additive): {lam_over or '(none -- household timing)'}")
+        lines.append("  lam (per-stage hazard REPLACEMENT, not additive):")
+        if lam_over:
+            lam_str = ", ".join(f"{stage}={val:+.1f}" for stage, val in lam_over.items())
+            lines.append(f"    {lam_str}")
+        else:
+            lines.append("    (none -- household timing)")
         lines.append("")
 
     lines.append("Population mix (agent counts, scaled to N_AGENTS):")
@@ -259,8 +343,8 @@ def main(out_path: str = "out/model_reference.pdf") -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with PdfPages(out_path) as pdf:
         title_page(pdf)
-        overview_page(pdf)
-        equations_page(pdf)
+        notation_page(pdf)
+        model_pages(pdf)
         persona_page(pdf)
         meal_table_page(pdf)
         glossary_pages(pdf)
