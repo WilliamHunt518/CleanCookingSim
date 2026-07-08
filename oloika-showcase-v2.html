@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oloika E-Cooking — Live Model Showcase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root{
+    --red:#C22A1E; --red-deep:#8F1B12;
+    --blue:#1F5FA8; --green:#2E7D4F;
+    --yellow:#F2B01E; --orange:#E2711D;
+    --black:#181310; --sand:#F7EFE2; --sand-2:#EFE3CE;
+    --ink:#241C16; --line:#D8C8AC;
+    --disp:'Anton',system-ui,sans-serif;
+    --body:'Archivo',Arial,sans-serif;
+    --mono:'Space Mono',ui-monospace,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{font-family:var(--body);background:var(--sand);color:var(--ink);line-height:1.5}
+  a{color:var(--red);text-decoration:none}
+  a:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+
+  .shuka{background:
+    repeating-linear-gradient(0deg,transparent 0 34px,rgba(24,19,16,.55) 34px 40px),
+    repeating-linear-gradient(90deg,transparent 0 34px,rgba(24,19,16,.55) 34px 40px),
+    repeating-linear-gradient(0deg,transparent 0 14px,rgba(31,95,168,.35) 14px 17px,transparent 17px 74px),
+    repeating-linear-gradient(90deg,transparent 0 14px,rgba(31,95,168,.35) 14px 17px,transparent 17px 74px),
+    var(--red)}
+  .beads{display:flex;height:10px}
+  .beads span{flex:1}
+  .beads span:nth-child(6n+1){background:var(--red)}
+  .beads span:nth-child(6n+2){background:var(--yellow)}
+  .beads span:nth-child(6n+3){background:var(--blue)}
+  .beads span:nth-child(6n+4){background:#fff}
+  .beads span:nth-child(6n+5){background:var(--green)}
+  .beads span:nth-child(6n+6){background:var(--black)}
+
+  nav{position:sticky;top:0;z-index:1200;background:var(--black);color:#fff;display:flex;align-items:center;gap:1.2rem;padding:.7rem 1.25rem;flex-wrap:wrap}
+  nav .brand{font-family:var(--disp);letter-spacing:.06em;color:var(--yellow)}
+  nav .brand em{color:#fff;font-style:normal}
+  nav a{color:#EFE3CE;font-size:.82rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+  nav a:hover{color:var(--yellow)}
+
+  .wrap{max-width:1160px;margin:0 auto;padding:0 1.25rem}
+  section{padding:3.4rem 0}
+  .sec-head{display:flex;align-items:baseline;gap:1rem;margin-bottom:.4rem;flex-wrap:wrap}
+  .kanga{font-family:var(--mono);font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;padding:.3rem .6rem;color:#fff}
+  h2{font-family:var(--disp);font-size:clamp(1.6rem,3.2vw,2.4rem);text-transform:uppercase}
+  .sec-sub{max-width:48rem;color:#4c4136;margin-bottom:1.6rem;font-size:.95rem}
+  .card{background:#fff;border:3px solid var(--black);box-shadow:7px 7px 0 var(--black);padding:1.1rem 1.2rem}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem}
+  .chart-title{font-family:var(--disp);font-size:.95rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
+  .chart-note{font-family:var(--mono);font-size:.68rem;color:#6a5c4c;margin-top:.4rem}
+  svg text{font-family:var(--mono)}
+
+  /* hero */
+  header.hero{color:#fff;padding:2.6rem 0 0}
+  .hero h1{font-family:var(--disp);font-size:clamp(2.2rem,5vw,3.8rem);line-height:1;text-transform:uppercase}
+  .hero h1 .hl{color:var(--yellow)}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:#FBE2B0;margin-bottom:.8rem}
+  .hero-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(255,255,255,.25);margin:1.4rem 0 1.8rem;max-width:760px}
+  .hero-stats div{background:var(--red-deep);padding:.7rem .8rem}
+  .hero-stats b{display:block;font-family:var(--disp);font-size:1.5rem;color:var(--yellow)}
+  .hero-stats small{font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;color:#F6DFC4}
+  .map-shell{border:4px solid var(--black);box-shadow:10px 10px 0 var(--black);background:var(--sand);margin-bottom:3rem;position:relative;z-index:1}
+  #oloikaMap{height:480px;width:100%}
+  .map-bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.55rem .9rem;background:var(--black);color:#EFE3CE;font-family:var(--mono);font-size:.68rem;flex-wrap:wrap}
+  .map-bar a{color:var(--yellow)}
+  .map-bar button{font-family:var(--mono);font-size:.66rem;background:var(--sand);border:2px solid var(--sand);padding:.2rem .55rem;cursor:pointer}
+  .map-bar button.on{background:var(--yellow);border-color:var(--yellow)}
+  .leaflet-container{font-family:var(--body)}
+
+  /* ============ SIMULATOR ============ */
+  #live{background:var(--black);color:var(--sand)}
+  #live h2{color:var(--yellow)}
+  #live .sec-sub{color:#CBBFA9}
+  .sim-controls{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin-bottom:1.2rem}
+  .sim-controls .tbtn,.sim-controls .pbtn{font-family:var(--disp);letter-spacing:.05em;text-transform:uppercase;font-size:.8rem;padding:.5rem .9rem;border:3px solid var(--sand);background:transparent;color:var(--sand);cursor:pointer}
+  .sim-controls .tbtn.on{background:var(--yellow);color:var(--black);border-color:var(--yellow)}
+  .sim-controls .pbtn{background:var(--red);border-color:var(--red);color:#fff}
+  .sim-controls .pbtn.playing{background:var(--green);border-color:var(--green)}
+  .sim-clock{font-family:var(--disp);font-size:2rem;color:var(--yellow);min-width:5.2rem;text-align:center;letter-spacing:.05em}
+  .sim-controls label{font-family:var(--mono);font-size:.65rem;color:#a3937d;display:flex;align-items:center;gap:.4rem}
+  .sim-grid{display:grid;grid-template-columns:minmax(300px,430px) 1fr;gap:1.4rem;align-items:start}
+  .panel{border:3px solid var(--sand);background:#221A14;padding:.9rem}
+  .panel h3{font-family:var(--disp);font-weight:400;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--yellow);margin-bottom:.55rem}
+  #agentField{width:100%;display:block}
+  .legend{display:flex;gap:1rem;flex-wrap:wrap;font-family:var(--mono);font-size:.62rem;color:#CBBFA9;margin-top:.6rem}
+  .legend i{display:inline-block;width:10px;height:10px;margin-right:.3rem;vertical-align:-1px}
+  #demandCanvas{width:100%;height:auto;display:block;background:#1B1410}
+  .sim-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-top:1.2rem}
+  .sim-stat{border:3px solid var(--sand);padding:.6rem .7rem;background:#221A14}
+  .sim-stat b{font-family:var(--disp);font-size:1.5rem;display:block;color:var(--yellow)}
+  .sim-stat small{font-size:.6rem;text-transform:uppercase;letter-spacing:.08em;color:#a3937d}
+  .sim-stat.w b{color:var(--red)} .sim-stat.e b{color:#7fc79b}
+  #feed{font-family:var(--mono);font-size:.66rem;color:#CBBFA9;height:74px;overflow:hidden;margin-top:.7rem;line-height:1.7}
+  #feed .fire{color:#e88d84} #feed .elec{color:#8fc5ff}
+
+  /* evidence */
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin:1.4rem 0}
+  .stat{border:3px solid var(--black);padding:.85rem;background:#fff;position:relative}
+  .stat::before{content:"";position:absolute;top:0;left:0;right:0;height:7px}
+  .stat.r::before{background:var(--red)} .stat.b::before{background:var(--blue)}
+  .stat.g::before{background:var(--green)} .stat.y::before{background:var(--yellow)}
+  .stat b{font-family:var(--disp);font-size:1.7rem;display:block}
+  .stat small{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;color:#5c5044}
+
+  /* constraints icon cards */
+  .con-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
+  .con{border:3px solid var(--black);background:#fff;padding:1rem;display:flex;gap:.9rem;align-items:flex-start}
+  .con svg{flex:0 0 46px}
+  .con h4{font-family:var(--disp);font-weight:400;text-transform:uppercase;font-size:.9rem;letter-spacing:.03em}
+  .con p{font-size:.78rem;color:#4c4136;margin-top:.2rem}
+  .con code{font-family:var(--mono);font-size:.68rem;background:var(--sand-2);padding:0 .3rem}
+
+  /* menu */
+  #menu{background:var(--sand-2)}
+  .menu-filters{display:flex;gap:.6rem;margin-bottom:1.2rem;flex-wrap:wrap}
+  .menu-filters button{font-family:var(--disp);text-transform:uppercase;font-size:.82rem;padding:.45rem 1rem;border:3px solid var(--black);background:#fff;cursor:pointer;box-shadow:4px 4px 0 var(--black)}
+  .menu-filters button.active{background:var(--black);color:var(--yellow)}
+  .menu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:1rem}
+  .meal{background:#fff;border:3px solid var(--black);display:flex;flex-direction:column;transition:transform .12s}
+  .meal:hover{transform:translate(-2px,-2px);box-shadow:5px 5px 0 var(--black)}
+  .meal .art{height:130px;display:flex;align-items:center;justify-content:center;border-bottom:3px solid var(--black)}
+  .meal.elec .art{background:linear-gradient(160deg,#e9f1fa,#cfe0f2)}
+  .meal.fire .art{background:linear-gradient(160deg,#fbe4dc,#f3c8ba)}
+  .meal .art svg{width:96px;height:96px}
+  .meal .tag{position:absolute;font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;padding:.15rem .45rem;color:#fff;margin:.45rem}
+  .meal{position:relative}
+  .meal.elec .tag{background:var(--blue)} .meal.fire .tag{background:var(--red)}
+  .meal h4{font-family:var(--disp);font-weight:400;font-size:.92rem;line-height:1.15;padding:.6rem .7rem .35rem;text-transform:uppercase}
+  .chips{display:flex;flex-wrap:wrap;gap:.3rem;padding:0 .7rem .7rem;margin-top:auto}
+  .chips span{font-family:var(--mono);font-size:.6rem;border:2px solid var(--black);padding:.08rem .4rem;background:var(--sand)}
+  .chips span.kw{background:var(--yellow)} .chips span.ch{background:#f3c8ba}
+
+  /* scale */
+  .scale-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+  .step{border:3px solid var(--black);background:#fff;padding:.95rem}
+  .step .n{font-family:var(--disp);font-size:2rem;color:var(--red);line-height:1}
+  .step h4{font-family:var(--disp);font-weight:400;text-transform:uppercase;font-size:.9rem;margin:.3rem 0 .25rem}
+  .step p{font-size:.78rem;color:#4c4136}
+
+  footer{background:var(--black);color:#B9AD98;padding:2rem 0;font-size:.75rem}
+  footer .wrap{display:flex;justify-content:space-between;gap:2rem;flex-wrap:wrap}
+  footer b{color:var(--yellow);font-family:var(--disp);font-weight:400}
+
+  @media(max-width:940px){
+    .sim-grid,.grid-2,.con-grid{grid-template-columns:1fr}
+    .hero-stats,.stat-row,.sim-stats,.scale-steps{grid-template-columns:1fr 1fr}
+    #oloikaMap{height:360px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ shared meal art symbols ============ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="i-uji" viewBox="0 0 64 64"><path d="M8 30h48c0 14-10 22-24 22S8 44 8 30z" fill="#E2711D"/><ellipse cx="32" cy="30" rx="24" ry="6" fill="#F2B01E"/><ellipse cx="32" cy="29" rx="18" ry="4" fill="#FBE2B0"/><path d="M24 14c-3 4 3 5 0 9M34 12c-3 4 3 5 0 9M44 14c-3 4 3 5 0 9" stroke="#8F1B12" stroke-width="2.4" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="i-mandazi" viewBox="0 0 64 64"><ellipse cx="32" cy="46" rx="26" ry="7" fill="#C22A1E" opacity=".25"/><path d="M14 40c0-10 8-18 18-18s18 8 18 18H14z" fill="#E2711D"/><path d="M18 40c0-8 6-14 14-14s14 6 14 14" fill="#F2B01E"/><circle cx="26" cy="33" r="1.6" fill="#8F1B12"/><circle cx="34" cy="30" r="1.6" fill="#8F1B12"/><circle cx="40" cy="35" r="1.6" fill="#8F1B12"/></symbol>
+<symbol id="i-chai" viewBox="0 0 64 64"><path d="M14 24h32v14a12 12 0 0 1-12 12h-8a12 12 0 0 1-12-12V24z" fill="#1F5FA8"/><path d="M14 24h32v6H14z" fill="#7fa3cd"/><path d="M46 28h6a6 6 0 0 1 0 12h-6" fill="none" stroke="#1F5FA8" stroke-width="4"/><path d="M24 8c-3 4 3 5 0 9M34 8c-3 4 3 5 0 9" stroke="#8F1B12" stroke-width="2.4" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="i-ugali" viewBox="0 0 64 64"><ellipse cx="32" cy="42" rx="28" ry="12" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><path d="M18 38c0-8 6-14 14-14s14 6 14 14c0 3-6 5-14 5s-14-2-14-5z" fill="#fff" stroke="#181310" stroke-width="2"/><path d="M12 44c4-3 10-3 14 0" stroke="#2E7D4F" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M40 46c3-2 8-2 11 0" stroke="#2E7D4F" stroke-width="4" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="i-stew" viewBox="0 0 64 64"><path d="M10 28h44v8a18 14 0 0 1-18 14h-8a18 14 0 0 1-18-14v-8z" fill="#181310"/><ellipse cx="32" cy="28" rx="22" ry="6" fill="#8F1B12"/><ellipse cx="32" cy="27" rx="17" ry="4" fill="#C22A1E"/><circle cx="26" cy="27" r="2.4" fill="#F2B01E"/><circle cx="37" cy="26" r="2.4" fill="#2E7D4F"/><path d="M6 30l6-4M58 30l-6-4" stroke="#181310" stroke-width="4" stroke-linecap="round"/></symbol>
+<symbol id="i-kuku" viewBox="0 0 64 64"><ellipse cx="32" cy="44" rx="26" ry="9" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><path d="M22 40c-2-10 4-18 12-18 7 0 12 6 12 13 0 4-2 7-6 8l-14-1c-2 0-3-1-4-2z" fill="#E2711D"/><path d="M44 30l8-6-3 8 6 1-8 4" fill="#E2711D"/><path d="M28 44c4 2 8 2 12 0" stroke="#2E7D4F" stroke-width="3.4" fill="none" stroke-linecap="round"/></symbol>
+<symbol id="i-chapati" viewBox="0 0 64 64"><ellipse cx="32" cy="46" rx="25" ry="7" fill="#E2711D"/><ellipse cx="32" cy="40" rx="25" ry="7" fill="#F2B01E"/><ellipse cx="32" cy="34" rx="25" ry="7" fill="#E2711D"/><ellipse cx="32" cy="28" rx="25" ry="7" fill="#F6D06A"/><circle cx="24" cy="27" r="1.7" fill="#8F1B12"/><circle cx="36" cy="29" r="1.7" fill="#8F1B12"/><circle cx="43" cy="26" r="1.4" fill="#8F1B12"/></symbol>
+<symbol id="i-fish" viewBox="0 0 64 64"><ellipse cx="32" cy="44" rx="27" ry="9" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><path d="M12 36c6-8 16-12 26-8l10-6-2 10 2 10-10-6c-10 4-20 0-26-8z" fill="#1F5FA8"/><circle cx="20" cy="34" r="2" fill="#fff"/><path d="M26 32c2 4 2 5 0 8M33 31c2 4 2 5 0 9" stroke="#7fa3cd" stroke-width="2" fill="none"/></symbol>
+<symbol id="i-mukimo" viewBox="0 0 64 64"><ellipse cx="32" cy="44" rx="27" ry="10" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><path d="M17 40c0-9 7-16 15-16s15 7 15 16c0 3-7 5-15 5s-15-2-15-5z" fill="#7fbf98"/><circle cx="26" cy="32" r="2.4" fill="#2E7D4F"/><circle cx="36" cy="29" r="2.4" fill="#F2B01E"/><circle cx="40" cy="36" r="2.4" fill="#2E7D4F"/></symbol>
+<symbol id="i-matoke" viewBox="0 0 64 64"><path d="M14 40c8 6 28 6 36 0l-4 10c-8 4-20 4-28 0z" fill="#8F1B12"/><path d="M16 24c4-8 10-12 16-12-2 6-2 12 0 18-6 2-12-1-16-6z" fill="#2E7D4F"/><path d="M32 12c6 0 12 4 16 12-4 5-10 8-16 6 2-6 2-12 0-18z" fill="#7fbf98"/></symbol>
+<symbol id="i-soup" viewBox="0 0 64 64"><path d="M12 26h40v6a16 16 0 0 1-16 16h-8a16 16 0 0 1-16-16v-6z" fill="#181310"/><ellipse cx="32" cy="26" rx="20" ry="5" fill="#E2711D"/><path d="M26 22c-1-5 3-6 2-10M36 22c-1-5 3-6 2-10" stroke="#8F1B12" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M22 26l4 4M40 25l-3 5" stroke="#F6D06A" stroke-width="3" stroke-linecap="round"/></symbol>
+<symbol id="i-choma" viewBox="0 0 64 64"><path d="M16 34c0-8 6-12 14-12 10 0 18 6 18 14 0 4-4 6-9 6H24c-5 0-8-3-8-8z" fill="#8F1B12"/><path d="M22 30c2-3 6-4 9-3" stroke="#C97B5A" stroke-width="3" fill="none" stroke-linecap="round"/><line x1="10" y1="48" x2="54" y2="48" stroke="#181310" stroke-width="3"/><line x1="16" y1="48" x2="16" y2="42" stroke="#181310" stroke-width="3"/><line x1="48" y1="48" x2="48" y2="42" stroke="#181310" stroke-width="3"/></symbol>
+<symbol id="i-choma-fire" viewBox="0 0 64 64"><path d="M18 30c0-7 5-11 12-11 9 0 16 5 16 12 0 4-3 5-8 5H25c-4 0-7-2-7-6z" fill="#8F1B12"/><line x1="12" y1="40" x2="52" y2="40" stroke="#181310" stroke-width="3"/><path d="M22 58c-5-5-3-10 1-13-1 5 3 5 3 9 3-2 2-6 1-9 6 3 9 9 4 13z" fill="#E2711D"/><path d="M38 58c-5-5-3-10 1-13-1 5 3 5 3 9 3-2 2-6 1-9 6 3 9 9 4 13z" fill="#C22A1E"/></symbol>
+<symbol id="i-fish-fire" viewBox="0 0 64 64"><path d="M10 28c6-8 16-12 26-8l10-6-2 10 2 10-10-6c-10 4-20 0-26-8z" fill="#1F5FA8"/><circle cx="18" cy="26" r="2" fill="#fff"/><line x1="12" y1="42" x2="52" y2="42" stroke="#181310" stroke-width="3"/><path d="M28 60c-5-5-3-10 1-13-1 5 3 5 3 9 3-2 2-6 1-9 6 3 9 9 4 13z" fill="#E2711D"/></symbol>
+<symbol id="i-soup-fire" viewBox="0 0 64 64"><path d="M14 22h36v5a14 14 0 0 1-14 14h-8a14 14 0 0 1-14-14v-5z" fill="#181310"/><ellipse cx="32" cy="22" rx="18" ry="4.5" fill="#E2711D"/><path d="M24 60c-5-5-3-10 1-13-1 5 3 5 3 9 3-2 2-6 1-9 6 3 9 9 4 13z" fill="#C22A1E"/><path d="M38 60c-4-4-3-9 1-11-1 4 2 4 2 7 2-2 2-5 1-7 5 2 7 7 3 11z" fill="#E2711D"/></symbol>
+<symbol id="i-greens" viewBox="0 0 64 64"><ellipse cx="32" cy="44" rx="27" ry="10" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><path d="M18 40c2-8 8-13 14-12-3 5-3 10-1 14-5 2-10 1-13-2z" fill="#2E7D4F"/><path d="M33 28c6-2 12 1 15 8-4 4-10 5-14 2 1-4 1-7-1-10z" fill="#7fbf98"/><path d="M26 30c1-3 4-4 6-3" stroke="#1d5636" stroke-width="2" fill="none"/></symbol>
+<symbol id="i-kachu" viewBox="0 0 64 64"><ellipse cx="32" cy="44" rx="27" ry="10" fill="#EFE3CE" stroke="#181310" stroke-width="2"/><circle cx="24" cy="38" r="6" fill="#C22A1E"/><circle cx="34" cy="34" r="6" fill="#E2711D"/><circle cx="42" cy="40" r="5" fill="#7fbf98"/><circle cx="24" cy="38" r="2.4" fill="#F6D06A"/></symbol>
+</defs>
+</svg>
+
+<nav aria-label="Main">
+  <span class="brand">OLOIKA <em>E-COOKING</em></span>
+  <a href="#village">Map</a>
+  <a href="#live">Live model</a>
+  <a href="#evidence">Field data</a>
+  <a href="#constraints">Constraints</a>
+  <a href="#menu">Menu</a>
+  <a href="#scale">Scale</a>
+</nav>
+
+<!-- ============ HERO + REAL MAP ============ -->
+<header class="hero shuka" id="village">
+  <div class="wrap">
+    <p class="eyebrow">MECS · COSMO Phase 2 · Shompole East ward, Kajiado West</p>
+    <h1>Cooking with the <span class="hl">sun</span> in Oloika</h1>
+    <div class="hero-stats" role="list">
+      <div role="listitem"><b>25 kWp</b><small>PV array</small></div>
+      <div role="listitem"><b>54 kWh</b><small>Li-ion storage</small></div>
+      <div role="listitem"><b>14</b><small>e-cookers</small></div>
+      <div role="listitem"><b>57%</b><small>daylight cooking</small></div>
+    </div>
+    <div class="map-shell">
+      <div id="oloikaMap" role="application" aria-label="Interactive satellite map of Oloika, Kajiado West, Kenya"></div>
+      <div class="map-bar">
+        <span>OLOIKA · −2.05°, 36.13° (approx.) · south of Lake Magadi on the Shompole road</span>
+        <span>
+          <button id="lyrSat" class="on">Satellite</button>
+          <button id="lyrTopo">Topo</button>
+          &nbsp;Basemap: Esri World Imagery — the imagery service behind <a href="https://kenya.africageoportal.com" target="_rel">kenya.africageoportal.com</a>
+        </span>
+      </div>
+    </div>
+  </div>
+  <div class="beads" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+</header>
+
+<!-- ============ LIVE AGENT SIMULATION ============ -->
+<section id="live">
+  <div class="wrap">
+    <div class="sec-head"><span class="kanga" style="background:var(--red)">Watch the model think</span><h2>100 agents, one day, live</h2></div>
+    <p class="sec-sub">The real equations from <span style="font-family:var(--mono)">sim/config.py</span>, running in your browser. Press play: agents light up when they start cooking, the demand curve draws itself, and the tariff you pick decides who defects to firewood.</p>
+
+    <div class="sim-controls">
+      <button class="pbtn" id="playBtn">▶ Run day</button>
+      <button class="tbtn" id="resetBtn">↺ Reset</button>
+      <span class="sim-clock" id="clock">05:00</span>
+      <span style="width:1rem"></span>
+      <button class="tbtn ton on" data-t="flat">Flat</button>
+      <button class="tbtn ton" data-t="evening_peak">Evening peak</button>
+      <button class="tbtn ton" data-t="solar_following">Solar-following</button>
+      <label>speed <input type="range" id="speed" min="1" max="12" value="5" style="accent-color:var(--yellow)"></label>
+    </div>
+
+    <div class="sim-grid">
+      <div class="panel">
+        <h3>The village · who's cooking now</h3>
+        <svg id="agentField" viewBox="0 0 420 420" aria-label="Grid of 100 agents that light up while cooking"></svg>
+        <div class="legend">
+          <span><i style="background:#4a3f35;border-radius:50%"></i>household (80)</span>
+          <span><i style="background:#4a3f35"></i>school (10)</span>
+          <span><i style="background:#4a3f35;transform:rotate(45deg)"></i>kiosk (10)</span>
+          <span><i style="background:var(--yellow);border-radius:50%"></i>cooking · electric</span>
+          <span><i style="background:var(--red);border-radius:50%"></i>cooking · fire/wood</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Village demand — drawing in progress</h3>
+        <canvas id="demandCanvas" width="680" height="380"></canvas>
+        <div class="legend">
+          <span><i style="background:var(--yellow)"></i>aggregate kW</span>
+          <span><i style="background:#e88d84"></i>price path (right axis)</span>
+          <span><i style="background:#C22A1E"></i>30 kW grid cap</span>
+        </div>
+        <div id="feed" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div class="sim-stats">
+      <div class="sim-stat"><b id="stMeals">0</b><small>meals cooked</small></div>
+      <div class="sim-stat e"><b id="stElec">0</b><small>electric meals</small></div>
+      <div class="sim-stat w"><b id="stWood">0%</b><small>wood share</small></div>
+      <div class="sim-stat"><b id="stPeak">0.0</b><small>peak kW (cap 30)</small></div>
+    </div>
+  </div>
+</section>
+
+<div class="beads" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+<!-- ============ FIELD DATA ============ -->
+<section id="evidence">
+  <div class="wrap">
+    <div class="sec-head"><span class="kanga" style="background:var(--blue)">What Oloika measured</span><h2>Field data · Aug '24 – Jul '25</h2></div>
+
+    <div class="stat-row">
+      <div class="stat r"><b>32→57</b><small>kWh/day village load</small></div>
+      <div class="stat b"><b>1.7</b><small>kWh/day e-cooking (12.5 predicted)</small></div>
+      <div class="stat y"><b>4.2 kW</b><small>max combined cooker load</small></div>
+      <div class="stat g"><b>KES 30/40</b><small>green vs standard tariff</small></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <p class="chart-title">Monthly consumption (kWh)</p>
+        <svg viewBox="0 0 760 290" role="img" aria-label="Monthly consumption growing from 1070 to 1764 kilowatt hours with maintenance dips">
+          <line x1="10" y1="240" x2="750" y2="240" stroke="#181310" stroke-width="3"/>
+          <rect x="190" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>
+          <rect x="370" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>
+          <g fill="#1F5FA8">
+            <rect x="12" y="109" width="40" height="131"/><rect x="72" y="112" width="40" height="128"/>
+            <rect x="132" y="85" width="40" height="155"/><rect x="192" y="126" width="40" height="114" fill="#7fa3cd"/>
+            <rect x="252" y="146" width="40" height="94" fill="#7fa3cd"/><rect x="312" y="92" width="40" height="148"/>
+            <rect x="372" y="99" width="40" height="141" fill="#7fa3cd"/><rect x="432" y="118" width="40" height="122" fill="#7fa3cd"/>
+            <rect x="492" y="87" width="40" height="153"/><rect x="552" y="58" width="40" height="182"/>
+            <rect x="612" y="42" width="40" height="198"/><rect x="672" y="24" width="40" height="216"/>
+          </g>
+          <line x1="14" y1="118" x2="710" y2="32" stroke="#C22A1E" stroke-width="3" stroke-dasharray="8 6"/>
+          <g font-size="9" fill="#181310" text-anchor="middle">
+            <text x="32" y="258">A'24</text><text x="92" y="258">S</text><text x="152" y="258">O</text>
+            <text x="212" y="258">N</text><text x="272" y="258">D</text><text x="332" y="258">J'25</text>
+            <text x="392" y="258">F</text><text x="452" y="258">M</text><text x="512" y="258">A</text>
+            <text x="572" y="258">M</text><text x="632" y="258">J</text><text x="692" y="258">J</text>
+          </g>
+          <text x="196" y="34" font-size="9" fill="#8a6b12">MAINTENANCE</text>
+          <text x="376" y="34" font-size="9" fill="#8a6b12">MAINTENANCE</text>
+        </svg>
+      </div>
+      <div class="card">
+        <p class="chart-title">57% of e-cooking in Green Light Hours</p>
+        <svg viewBox="0 0 380 120" role="img" aria-label="57 percent daytime cooking versus 43 percent other hours">
+          <rect x="16" y="30" width="348" height="56" fill="#EFE3CE" stroke="#181310" stroke-width="3"/>
+          <rect x="16" y="30" width="198" height="56" fill="#2E7D4F"/>
+          <text x="30" y="64" font-size="20" fill="#fff" font-weight="bold">57% ☀ daylight</text>
+          <text x="226" y="64" font-size="13">43% other</text>
+        </svg>
+        <p class="chart-title" style="margin-top:1rem">Financing recovery</p>
+        <svg viewBox="0 0 380 96" role="img" aria-label="23 percent of the 95000 shilling investment repaid so far, full 112100 anticipated">
+          <rect x="16" y="14" width="348" height="26" fill="#EFE3CE" stroke="#181310" stroke-width="2.5"/>
+          <rect x="16" y="14" width="80" height="26" fill="#2E7D4F"/>
+          <text x="104" y="32" font-size="11" font-weight="bold">KES 18,400 repaid · 23% of 95,000</text>
+          <rect x="16" y="52" width="348" height="26" fill="#F2B01E" stroke="#181310" stroke-width="2.5"/>
+          <text x="24" y="70" font-size="11" font-weight="bold">KES 112,100 full repayment on track (Magadi Sacco)</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="beads" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+<!-- ============ CONSTRAINTS ============ -->
+<section id="constraints">
+  <div class="wrap">
+    <div class="sec-head"><span class="kanga" style="background:var(--green)">Grounded in Oloika</span><h2>Local constraints → model knobs</h2></div>
+    <p class="sec-sub">42 of 51 parameters are honest placeholders awaiting survey data — the structure is fixed, the numbers are Oloika's to fill in.</p>
+    <div class="con-grid">
+      <div class="con">
+        <svg viewBox="0 0 64 64"><use href="#i-choma-fire"/></svg>
+        <div><h4>Fuel stacking</h4><p>4 fire-only meals draw <code>0 kWh</code> — immune to any tariff. Ugali &amp; choma flavour keeps wood alive by design, not by rule.</p></div>
+      </div>
+      <div class="con">
+        <svg viewBox="0 0 64 64"><path d="M32 6l6 12 14 2-10 10 2 14-12-6-12 6 2-14L12 20l14-2z" fill="#F2B01E" stroke="#181310" stroke-width="2"/></svg>
+        <div><h4>Price sensitivity</h4><p><code>γ_cost = 1.2</code> on <code>−p(t)·e_k</code> — the only channel a tariff has. Drought-squeezed incomes make it the No. 1 knob.</p></div>
+      </div>
+      <div class="con">
+        <svg viewBox="0 0 64 64"><rect x="10" y="24" width="44" height="26" fill="#1F5FA8" stroke="#181310" stroke-width="2"/><path d="M22 24v-8h20v8" fill="none" stroke="#181310" stroke-width="2"/><circle cx="32" cy="37" r="7" fill="#F2B01E"/></svg>
+        <div><h4>Evening battery stress</h4><p>evening_peak window <code>17–21h @ 0.45</code>; grid cap <code>30 kW</code>, breaches penalised <code>Π = 5</code> in the score.</p></div>
+      </div>
+      <div class="con">
+        <svg viewBox="0 0 64 64"><use href="#i-stew"/></svg>
+        <div><h4>Real market prices</h4><p>Costs normalised to local maxima: choma <code>150 KES</code>, chapati <code>45 min</code>, bone-soup charcoal <code>108 KES</code>.</p></div>
+      </div>
+      <div class="con">
+        <svg viewBox="0 0 64 64"><rect x="8" y="30" width="48" height="22" fill="#E2711D" stroke="#181310" stroke-width="2"/><path d="M8 30l24-16 24 16" fill="none" stroke="#181310" stroke-width="3"/><rect x="27" y="38" width="10" height="14" fill="#181310"/></svg>
+        <div><h4>Restaurants &amp; school</h4><p>Kiosk: taste <code>+1.4</code>, prep <code>−0.8</code>, hours unknown → flagged, not invented. School: lunch-only <code>λ = +2</code>, budget <code>−2.3</code>.</p></div>
+      </div>
+      <div class="con">
+        <svg viewBox="0 0 64 64"><use href="#i-choma"/></svg>
+        <div><h4>Festivals</h4><p>Scenario offsets: choma <code>+1.0</code> appeal, dinner bump <code>+1.5 h</code> later — a template for market days &amp; droughts.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="beads" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+<!-- ============ MENU ============ -->
+<section id="menu">
+  <div class="wrap">
+    <div class="sec-head"><span class="kanga" style="background:var(--orange)">Master Table Z</span><h2>The 18-meal menu</h2></div>
+    <p class="sec-sub">Local dishes at Magadi-area prices. Blue = mini-grid. Red = fire-only, the wood the tariff competes with.</p>
+    <div class="menu-filters" role="group" aria-label="Filter meals">
+      <button class="active" data-f="all">All 18</button>
+      <button data-f="elec">⚡ Electric (14)</button>
+      <button data-f="fire">🔥 Fire-only (4)</button>
+    </div>
+    <div class="menu-grid" id="mealGrid"></div>
+  </div>
+</section>
+
+<div class="beads" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+<!-- ============ SCALABILITY ============ -->
+<section id="scale">
+  <div class="wrap">
+    <div class="sec-head"><span class="kanga" style="background:var(--red)">Beyond one village</span><h2>Scalability</h2></div>
+    <div class="scale-steps">
+      <div class="step"><span class="n">1</span><h4>Capacity first</h4><p>Model before you plug in: Oloika's upgrade (25 kWp / 54 kWh) left ~50% daytime headroom.</p></div>
+      <div class="step"><span class="n">2</span><h4>Finance locally</h4><p>Sacco-backed sales: subsidies 40% → 25% → 0% within a year; MSSL now invests its own capital.</p></div>
+      <div class="step"><span class="n">3</span><h4>Signal, don't lecture</h4><p>Green LED + 25% discount → 57% daylight cooking, rising monthly.</p></div>
+      <div class="step"><span class="n">4</span><h4>Rehearse, then price</h4><p>Re-run the simulator per site: new menu, personas, PV curve — same score: wood share + 5 × P(cap breach).</p></div>
+    </div>
+    <p class="chart-note" style="margin-top:1.2rem">Revenue: ~KES 2,100/mo now → KES 4,200/mo at 4 kWh/day · wood_share is the number carbon credits (Gold Standard / Verra) are written against.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div><b>OLOIKA E-COOKING · COSMO PHASE 2</b><p style="margin-top:.3rem">Field data: Univ. of Southampton &amp; Kenya Power (MECS/FCDO, Oct 2025). Simulator: sim/config.py, Jul 2026.</p></div>
+    <div><b>SHUKA PALETTE</b><p style="margin-top:.3rem">Red — bravery &amp; strength · Blue — sky &amp; water · Green — land · Yellow/Orange — hospitality · Black — the people.</p></div>
+  </div>
+</footer>
+
+<script>
+/* ================= MAP ================= */
+(function(){
+  const map = L.map('oloikaMap', {scrollWheelZoom:false}).setView([-2.049, 36.132], 13);
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:18, attribution:'Imagery © Esri, Maxar, Earthstar Geographics — basemap service used by Kenya Africa GeoPortal'});
+  const topo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:18, attribution:'© Esri World Topographic Map'});
+  sat.addTo(map);
+
+  const mk = (ll, color, html, popup) => L.marker(ll, {icon:L.divIcon({className:'',
+    html:`<div style="background:${color};border:3px solid #181310;color:#fff;font:700 10px Archivo;padding:3px 7px;white-space:nowrap;box-shadow:3px 3px 0 #181310">${html}</div>`,
+    iconAnchor:[10,10]})}).addTo(map).bindPopup(popup);
+
+  mk([-2.049,36.132], '#C22A1E', '☀ OLOIKA MINI-GRID', '<b>Oloika power plant</b><br>25 kWp PV · 54 kWh Li-ion · 3-phase<br>72 metered + 12 sub-metered customers');
+  mk([-2.028,36.152], '#E2711D', '🍲 e-cooking premises', '<b>7 premises, 14 e-cookers</b><br>mostly restaurants — EPCs & induction hobs');
+  mk([-1.980,36.230], '#1F5FA8', 'LAKE MAGADI', '<b>Lake Magadi</b><br>soda lake, ~15 km NE on the tarmac road');
+  mk([-2.105,36.075], '#2E7D4F', 'SHOMPOLE', '<b>Shompole centre</b><br>sister e4D mini-grid, ~10 km SW');
+
+  L.circle([-2.049,36.132], {radius:1600, color:'#F2B01E', weight:3, dashArray:'8 6', fillColor:'#F2B01E', fillOpacity:.08})
+    .addTo(map).bindPopup('Approximate mini-grid service area');
+
+  const bS=document.getElementById('lyrSat'), bT=document.getElementById('lyrTopo');
+  bS.onclick=()=>{map.addLayer(sat);map.removeLayer(topo);bS.classList.add('on');bT.classList.remove('on');};
+  bT.onclick=()=>{map.addLayer(topo);map.removeLayer(sat);bT.classList.add('on');bS.classList.remove('on');};
+})();
+
+/* ================= MODEL DATA (sim/config.py + master_table_Z.md) ================= */
+// z attrs order: taste, tradition, kid, batch, ing_cost, prep_min, kcal, fuelcost
+const MEALS = [
+ {n:"Uji + honey + sweet potato",icon:"i-uji",type:"ELEC",kw:1.0,kwh:.75,min:45,kcal:280,kes:25,prep:10,z:[.5,.8,1,.4],ch:0},
+ {n:"Mahamri + mbaazi za nazi",icon:"i-mandazi",type:"ELEC",kw:1.2,kwh:1.2,min:60,kcal:780,kes:60,prep:40,z:[.8,.4,.9,.8],ch:0},
+ {n:"Chai + roasted sweet potato",icon:"i-chai",type:"FIRE",kw:0,kwh:0,min:45,kcal:360,kes:30,prep:10,z:[.55,.85,.8,.3],ch:36},
+ {n:"Githeri + avocado (EPC)",icon:"i-mukimo",type:"ELEC",kw:1.0,kwh:1.0,min:60,kcal:640,kes:45,prep:20,z:[.55,.5,.7,1],ch:0},
+ {n:"Ugali + ndengu stew",icon:"i-ugali",type:"ELEC",kw:1.2,kwh:1.2,min:60,kcal:620,kes:40,prep:15,z:[.6,.55,.7,.8],ch:0},
+ {n:"Ugali + sukuma + beef stew",icon:"i-stew",type:"ELEC",kw:1.5,kwh:2.25,min:90,kcal:800,kes:90,prep:30,z:[.8,.6,.8,.6],ch:0},
+ {n:"Ugali + kuku kienyeji + managu",icon:"i-kuku",type:"ELEC",kw:1.4,kwh:2.1,min:90,kcal:770,kes:110,prep:35,z:[.9,.7,.9,.5],ch:0},
+ {n:"Chapati + maharagwe ya nazi",icon:"i-chapati",type:"ELEC",kw:1.6,kwh:2.4,min:90,kcal:680,kes:55,prep:45,z:[.85,.5,.95,.7],ch:0},
+ {n:"Ugali + fried tilapia + kachumbari",icon:"i-fish",type:"ELEC",kw:1.5,kwh:1.13,min:45,kcal:730,kes:100,prep:20,z:[.85,.5,.6,.2],ch:0},
+ {n:"Mukimo + beef stew",icon:"i-mukimo",type:"ELEC",kw:1.5,kwh:1.88,min:75,kcal:790,kes:85,prep:30,z:[.7,.6,.8,.5],ch:0},
+ {n:"Matoke + beef",icon:"i-matoke",type:"ELEC",kw:1.2,kwh:.9,min:45,kcal:420,kes:60,prep:20,z:[.6,.5,.7,.5],ch:0},
+ {n:"Motori bone soup + cassava",icon:"i-soup",type:"ELEC",kw:0.8,kwh:2.0,min:150,kcal:550,kes:70,prep:15,z:[.7,1,.5,.7],ch:0},
+ {n:"Nyama choma (oven) + kachumbari",icon:"i-choma",type:"ELEC",kw:2.0,kwh:2.0,min:60,kcal:385,kes:150,prep:15,z:[.9,.7,.6,.5],ch:0},
+ {n:"Nyama choma — open fire",icon:"i-choma-fire",type:"FIRE",kw:0,kwh:0,min:60,kcal:385,kes:150,prep:15,z:[1,1,.6,.5],ch:90},
+ {n:"Tilapia / catfish grilled on fire",icon:"i-fish-fire",type:"FIRE",kw:0,kwh:0,min:30,kcal:280,kes:90,prep:15,z:[.8,.5,.5,.2],ch:42},
+ {n:"Motori bone soup — open fire",icon:"i-soup-fire",type:"FIRE",kw:0,kwh:0,min:150,kcal:550,kes:70,prep:15,z:[.7,1,.5,.7],ch:108},
+ {n:"Ugali + sukuma (side)",icon:"i-greens",type:"ELEC",kw:1.5,kwh:1.13,min:45,kcal:410,kes:30,prep:15,z:[.6,.6,.8,.3],ch:0},
+ {n:"Ugali + kachumbari (side)",icon:"i-kachu",type:"ELEC",kw:1.5,kwh:.75,min:30,kcal:320,kes:20,prep:10,z:[.55,.6,.8,.3],ch:0}
+];
+const K = MEALS.length;
+const Z = MEALS.map(m => [m.z[0], m.z[1], m.z[2], m.z[3], m.kes/150, m.prep/45, m.kcal/800, m.type==="FIRE"? m.ch/108 : 0]);
+const ALPHA_K = MEALS.map(m => m.kcal/800);
+const E_KWH = MEALS.map(m => m.kwh);
+
+const BASE_G = [1.0,.6,.4,.3,-.8,-.4,.2,-.8], G_COST = 1.2, SIG = 0.15;
+const OFF = {school:{0:.3,2:1.2,3:1.5,4:-1.5}, kiosk:{0:1.4,3:1.0,5:-.8}};
+const LAM = {household:[0,0,0], school:[-6,2,-6], kiosk:[0,0,0]};
+const WIN = [[5,11],[11,16],[16,23]], CTR=[7.5,12.5,18.5], HT=[1.2,1.5,1.8], B=-6, WID=1.5;
+const DELTA=.15, A0=.4, KAP=.05, NBAR=[9,14,21], BLK=5, T=288;
+const CAP=30, PBAR=.25, PLO=.1, PHI=.45, PK=[17,21], RISE=6.5, SET=18.5;
+
+function wOfT(h){let w=B;for(let s=0;s<3;s++)w+=(HT[s]-B)*Math.exp(-.5*((h-CTR[s])/WID)**2);return w;}
+function nbar(h){return h>=NBAR[2]?3:h>=NBAR[1]?2:h>=NBAR[0]?1:0;}
+function pv(h){if(h<RISE||h>SET)return 0;return Math.sin(Math.PI*(h-RISE)/(SET-RISE));}
+function makeTariff(name){
+  const p=new Array(T);
+  for(let t=0;t<T;t++){const h=t*BLK/60;
+    if(name==="flat")p[t]=PBAR;
+    else if(name==="evening_peak")p[t]=(h>=PK[0]&&h<PK[1])?PHI:PLO;
+    else p[t]=PHI-(PHI-PLO)*pv(h);
+  }
+  const m=p.reduce((a,b)=>a+b)/T;return p.map(x=>x*PBAR/m);
+}
+const TARIFFS={flat:makeTariff("flat"),evening_peak:makeTariff("evening_peak"),solar_following:makeTariff("solar_following")};
+
+/* ---- agents ---- */
+let rngS=12345;function rnd(){rngS=(rngS*1103515245+12345)&0x7fffffff;return rngS/0x7fffffff;}
+function gauss(){return (rnd()+rnd()+rnd()+rnd()-2)*1.732;}
+function makeAgents(){
+  rngS=12345;const ags=[];
+  const mix=[["household",80],["school",10],["kiosk",10]];
+  for(const[p,n]of mix)for(let i=0;i<n;i++){
+    const g=BASE_G.map((v,j)=>v+(OFF[p]&&OFF[p][j]||0)+gauss()*SIG);
+    ags.push({p,g,gc:G_COST+gauss()*SIG,lam:LAM[p],h:[0,0,0],tau:0,cookLeft:0,kw:0,lastFire:false});
+  }
+  return ags;
+}
+
+/* ---- sim state ---- */
+let agents=makeAgents(), t=Math.round(5*60/BLK), tariffName="flat";
+let demand=new Array(T).fill(null), playing=false, timer=null;
+let meals=0, elec=0, wood=0, peak=0;
+
+/* ---- agent field SVG ---- */
+const field=document.getElementById('agentField');
+const cells=[];
+(function(){
+  const per=10,cs=42;
+  agents.forEach((a,i)=>{
+    const x=(i%per)*cs+cs/2, y=Math.floor(i/per)*cs+cs/2, ns="http://www.w3.org/2000/svg";
+    let el;
+    if(a.p==="household"){el=document.createElementNS(ns,"circle");el.setAttribute("cx",x);el.setAttribute("cy",y);el.setAttribute("r",11);}
+    else if(a.p==="school"){el=document.createElementNS(ns,"rect");el.setAttribute("x",x-11);el.setAttribute("y",y-11);el.setAttribute("width",22);el.setAttribute("height",22);}
+    else{el=document.createElementNS(ns,"rect");el.setAttribute("x",x-10);el.setAttribute("y",y-10);el.setAttribute("width",20);el.setAttribute("height",20);el.setAttribute("transform",`rotate(45 ${x} ${y})`);}
+    el.setAttribute("fill","#4a3f35");el.setAttribute("stroke","#181310");el.setAttribute("stroke-width","2");
+    field.appendChild(el);cells.push(el);
+  });
+})();
+function paintAgents(){
+  agents.forEach((a,i)=>{
+    const el=cells[i];
+    if(a.cookLeft>0){
+      el.setAttribute("fill", a.lastFire?"#C22A1E":"#F2B01E");
+      el.setAttribute("stroke", a.lastFire?"#E2711D":"#fff");
+    }else{el.setAttribute("fill","#4a3f35");el.setAttribute("stroke","#181310");}
+  });
+}
+
+/* ---- demand chart ---- */
+const cv=document.getElementById('demandCanvas'),cx=cv.getContext('2d');
+const M={l:44,r:44,t:16,b:28},W=cv.width-M.l-M.r,H=cv.height-M.t-M.b,YMAX=40;
+function x_(tt){return M.l+tt/T*W} function y_(kw){return M.t+H-Math.min(kw,YMAX)/YMAX*H}
+function yP(p){return M.t+H-p/0.6*H}
+function drawChart(){
+  cx.fillStyle="#1B1410";cx.fillRect(0,0,cv.width,cv.height);
+  cx.strokeStyle="#4a3f35";cx.lineWidth=1;cx.font="10px 'Space Mono'";cx.fillStyle="#a3937d";
+  for(let kw=0;kw<=YMAX;kw+=10){cx.beginPath();cx.moveTo(M.l,y_(kw));cx.lineTo(M.l+W,y_(kw));cx.stroke();cx.fillText(kw+" kW",4,y_(kw)+3);}
+  for(let h=0;h<=24;h+=6){const xx=x_(h*12);cx.beginPath();cx.moveTo(xx,M.t);cx.lineTo(xx,M.t+H);cx.stroke();cx.fillText(h+"h",xx-8,cv.height-8);}
+  // cap
+  cx.strokeStyle="#C22A1E";cx.setLineDash([8,6]);cx.lineWidth=2;
+  cx.beginPath();cx.moveTo(M.l,y_(CAP));cx.lineTo(M.l+W,y_(CAP));cx.stroke();cx.setLineDash([]);
+  // price path
+  const P=TARIFFS[tariffName];
+  cx.strokeStyle="#e88d84";cx.lineWidth=2;cx.beginPath();
+  for(let i=0;i<T;i++){const xx=x_(i),yy=yP(P[i]);i?cx.lineTo(xx,yy):cx.moveTo(xx,yy);}
+  cx.stroke();
+  cx.fillStyle="#e88d84";cx.fillText("0.45",cv.width-38,yP(.45)+3);cx.fillText("0.10",cv.width-38,yP(.10)+3);
+  // demand so far
+  cx.strokeStyle="#F2B01E";cx.lineWidth=2.5;cx.beginPath();let started=false;
+  for(let i=0;i<T;i++){if(demand[i]===null)break;const xx=x_(i),yy=y_(demand[i]);started?cx.lineTo(xx,yy):(cx.moveTo(xx,yy),started=true);}
+  cx.stroke();
+  // fill under
+  if(started){cx.lineTo(x_(Math.min(t,T-1)),y_(0));cx.lineTo(M.l,y_(0));cx.closePath();cx.fillStyle="rgba(242,176,30,.12)";cx.fill();}
+  // playhead
+  const xx=x_(Math.min(t,T-1));cx.strokeStyle="#EFE3CE";cx.lineWidth=1.5;
+  cx.beginPath();cx.moveTo(xx,M.t);cx.lineTo(xx,M.t+H);cx.stroke();
+}
+
+/* ---- feed ---- */
+const feed=document.getElementById('feed');let feedLines=[];
+function pushFeed(hh,meal,fire){
+  feedLines.unshift(`<span class="${fire?'fire':'elec'}">${hh} · ${fire?'🔥':'⚡'} ${meal}</span>`);
+  feedLines=feedLines.slice(0,4);feed.innerHTML=feedLines.join("<br>");
+}
+
+/* ---- step ---- */
+function softmaxPick(u){
+  const mx=Math.max(...u),ex=u.map(v=>Math.exp(v-mx)),s=ex.reduce((a,b)=>a+b);
+  let r=rnd()*s;for(let k=0;k<K;k++){r-=ex[k];if(r<=0)return k;}return K-1;
+}
+function stepBlock(){
+  if(t>=T){stop();return;}
+  const h=t*BLK/60, P=TARIFFS[tariffName];
+  let kwSum=0;
+  const stage=WIN.findIndex(w=>h>=w[0]&&h<w[1]);
+  for(const a of agents){
+    if(a.cookLeft>0){kwSum+=a.kw;a.cookLeft--; if(a.cookLeft===0)a.kw=0;}
+    a.tau=Math.min(a.tau+BLK/60,24);
+    if(stage<0||a.h[stage]!==0||a.cookLeft>0)continue;
+    const hunger=Math.max(0,nbar(h)-a.h.filter(x=>x>0).length)+KAP*a.tau;
+    const logit=wOfT(h)+a.lam[stage]+A0*hunger;
+    const q=DELTA/(1+Math.exp(-logit));
+    if(rnd()<q){
+      const u=Z.map((z,k)=>{
+        let dot=0;for(let j=0;j<8;j++)dot+=a.g[j]*z[j];
+        return dot - a.gc*P[t]*E_KWH[k] + ALPHA_K[k]*hunger;
+      });
+      const k=softmaxPick(u);
+      a.h[stage]=k+1;a.tau=0;
+      a.cookLeft=Math.max(1,Math.round(MEALS[k].min/BLK));
+      a.kw=MEALS[k].kw;a.lastFire=MEALS[k].type==="FIRE";
+      kwSum+=a.kw;a.cookLeft--;
+      meals++; MEALS[k].type==="FIRE"?wood++:elec++;
+      const hh=String(Math.floor(h)).padStart(2,"0")+":"+String(Math.round(h%1*60)).padStart(2,"0");
+      pushFeed(hh,MEALS[k].n,a.lastFire);
+    }
+  }
+  demand[t]=kwSum;peak=Math.max(peak,kwSum);
+  t++;
+  updateUI();
+}
+function updateUI(){
+  const h=Math.min(t,T)*BLK/60;
+  document.getElementById('clock').textContent=String(Math.floor(h)).padStart(2,"0")+":"+String(Math.round(h%1*60)).padStart(2,"0");
+  document.getElementById('stMeals').textContent=meals;
+  document.getElementById('stElec').textContent=elec;
+  document.getElementById('stWood').textContent=meals?Math.round(100*wood/meals)+"%":"0%";
+  const pk=document.getElementById('stPeak');pk.textContent=peak.toFixed(1);
+  pk.style.color=peak>CAP?"#e88d84":"";
+  paintAgents();drawChart();
+}
+function stop(){playing=false;clearInterval(timer);document.getElementById('playBtn').textContent="▶ Run day";document.getElementById('playBtn').classList.remove("playing");}
+function reset(){
+  stop();agents=makeAgents();t=Math.round(5*60/BLK);
+  demand=new Array(T).fill(null);meals=0;elec=0;wood=0;peak=0;feedLines=[];feed.innerHTML="";
+  updateUI();
+}
+document.getElementById('playBtn').onclick=function(){
+  if(playing){stop();return;}
+  if(t>=T)reset();
+  playing=true;this.textContent="❚❚ Pause";this.classList.add("playing");
+  const spd=()=>+document.getElementById('speed').value;
+  clearInterval(timer);
+  timer=setInterval(()=>{for(let i=0;i<spd();i++){if(t<T)stepBlock();else{stop();break;}}},50);
+};
+document.getElementById('resetBtn').onclick=reset;
+document.querySelectorAll('.ton').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.ton').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');tariffName=b.dataset.t;reset();
+});
+updateUI();
+
+/* ================= MENU CARDS ================= */
+const grid=document.getElementById('mealGrid');
+function renderMenu(f){
+  grid.innerHTML=MEALS.filter(m=>f==='all'||m.type.toLowerCase()===f).map(m=>{
+    const cls=m.type==="ELEC"?"elec":"fire";
+    return `<article class="meal ${cls}">
+      <span class="tag">${m.type==="ELEC"?"⚡ MINI-GRID":"🔥 FIRE-ONLY"}</span>
+      <div class="art"><svg viewBox="0 0 64 64" role="img" aria-label="${m.n}"><use href="#${m.icon}"/></svg></div>
+      <h4>${m.n}</h4>
+      <div class="chips">
+        <span>${m.min} min</span><span>${m.kcal} kcal</span><span>KES ${m.kes}</span>
+        ${m.type==="ELEC"?`<span class="kw">${m.kwh} kWh</span>`:`<span class="ch">charcoal KES ${m.ch}</span>`}
+      </div>
+    </article>`;
+  }).join("");
+}
+renderMenu('all');
+document.querySelectorAll('.menu-filters button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.menu-filters button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');renderMenu(b.dataset.f);
+});
+</script>
+</body>
+</html>
