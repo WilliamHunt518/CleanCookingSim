@@ -1,18 +1,15 @@
-"""Scoring: wood share, exceedance probability, scoreboard assembly.
+"""Scoring: wood share, scoreboard assembly.
 
-    score(tariff) = wood_share + PI * P_exceed
-    wood_share    = fraction of all eaten meals (population, all runs) that were wood
-    P_exceed      = fraction of Monte Carlo runs where any block's aggregate demand
-                    exceeded the grid cap
+    wood_share = fraction of all eaten meals (population, all runs) that were wood
 
-Lower score wins.
+Lower wood_share wins (fewer meals cooked over fire).
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from sim import config, meals
+from sim import meals
 from sim.run import TariffRunResult
 from sim.population import Population
 
@@ -27,16 +24,6 @@ def wood_share(result: TariffRunResult) -> float:
     return n_wood / len(events)
 
 
-def p_exceed(result: TariffRunResult) -> float:
-    if not result.exceed_flags:
-        return 0.0
-    return float(np.mean(result.exceed_flags))
-
-
-def score_of(result: TariffRunResult) -> float:
-    return wood_share(result) + config.SCORING.PI * p_exceed(result)
-
-
 def household_kwh_stats(result: TariffRunResult, population: Population) -> tuple[float, float]:
     """Mean/median daily kWh among household-persona agents, pooled across all runs."""
     household_mask = population.persona_idx == 0
@@ -48,15 +35,12 @@ def scoreboard(results: dict[str, TariffRunResult], population: Population) -> p
     rows = []
     for name, result in results.items():
         ws = wood_share(result)
-        pe = p_exceed(result)
         mean_kwh, median_kwh = household_kwh_stats(result, population)
         rows.append({
             "tariff": name,
             "wood_share": ws,
-            "P_exceed": pe,
-            "score": ws + config.SCORING.PI * pe,
             "mean_daily_kwh_household": mean_kwh,
             "median_daily_kwh_household": median_kwh,
         })
-    df = pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
+    df = pd.DataFrame(rows).sort_values("wood_share").reset_index(drop=True)
     return df

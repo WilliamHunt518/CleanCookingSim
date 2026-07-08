@@ -7,9 +7,9 @@ over utilities. Wood draws zero grid energy, so it is immune to the
 electricity tariff -- defection to wood under bad tariffs emerges from the
 arithmetic, it is not scripted.
 
-The experiment: sweep day-ahead tariffs, simulate the population, score each
-tariff by wood share plus a penalty for the probability that aggregate demand
-ever exceeds the grid cap.
+The experiment: sweep day-ahead tariffs, simulate the population, and score
+each tariff by wood share -- the fraction of all meals cooked on fire rather
+than electric.
 
 ## Quickstart
 
@@ -38,11 +38,13 @@ python generate_model_pdf.py   # writes model_reference.pdf -- equations + every
   utility waterfall), regenerated on each run.
 - **Parameters** -- where you actually craft a persona: household/school
   `gamma`, `gamma_cost`, `sigma_ind`, school `lam` overrides, `DELTA`, tariff
-  levels, `PI`, population size/mix. All of this sits inside a form, so
+  levels, population size/mix. All of this sits inside a form, so
   **nothing changes until you press Save** (or **Save & run simulation** to
   save and immediately re-sweep) -- dragging a slider here never silently
   recomputes anything.
-- **Explainability** -- the full parameter glossary (grouped, with units/
+- **Explainability** -- a plain-English walkthrough of the two-stage decision
+  (what the hazard logit, sigmoid, lambda, gamma, and softmax actually do,
+  not just their names), the full parameter glossary (grouped, with units/
   meaning/effect/tbd, same content as `python -m sim explain`), plus a
   worked example: pick a persona/hour/price/hunger state and see every term
   of the Stage 1 hazard and Stage 2 softmax choice substituted with real
@@ -130,7 +132,7 @@ sim/tariffs.py     flat / evening_peak / solar_following, PV stub, normalisation
 sim/agent.py       pure functions: fire (hazard), which (softmax choice), update
 sim/population.py  personas (household/school), individual sampling
 sim/run.py         day loop, Monte Carlo sweep, demand assembly
-sim/score.py       wood share, exceedance probability, scoreboard
+sim/score.py       wood share, scoreboard
 sim/plots.py       the four output figures
 sim/cli.py         explain / audit / run subcommands
 prism_export.py    stretch goal: exports one persona as a PRISM .pm/.props model

@@ -64,7 +64,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     )
 
     board = score.scoreboard(results, population)
-    print("SCOREBOARD (lower score wins)")
+    print("SCOREBOARD (sorted by wood_share ascending)")
     print(board.to_string(index=False))
     board.to_csv(f"{args.out_dir}/scoreboard.csv", index=False)
 

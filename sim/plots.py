@@ -31,7 +31,6 @@ def plot_load_curves(results: dict[str, TariffRunResult], out_dir: str = "out") 
         ax.plot(T_HR, mean_curve, label=name)
         ax2.plot(T_HR, result.price, alpha=0.25, linestyle="--")
 
-    ax.axhline(config.TARIFF.cap_kw, color="black", linestyle=":", label=f"cap ({config.TARIFF.cap_kw:g} kW)")
     ax.set_xlabel("hour of day")
     ax.set_ylabel("aggregate demand (kW)")
     ax2.set_ylabel("price (currency/kWh, faint dashed)")
@@ -48,15 +47,14 @@ def plot_wood_share(results: dict[str, TariffRunResult], out_dir: str = "out") -
     _ensure_out(out_dir)
     names = list(results.keys())
     shares = [score.wood_share(results[n]) for n in names]
-    exceeds = [score.p_exceed(results[n]) for n in names]
 
     fig, ax = plt.subplots(figsize=(8, 5))
     bars = ax.bar(names, shares, color="tab:brown")
-    for bar, pe in zip(bars, exceeds):
+    for bar, share in zip(bars, shares):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"P_exceed={pe:.2f}", ha="center", va="bottom")
+                f"{share:.2f}", ha="center", va="bottom")
     ax.set_ylabel("wood share (fraction of all meals cooked)")
-    ax.set_title("Wood share by tariff (annotated with cap-exceedance probability)")
+    ax.set_title("Wood share by tariff")
     fig.tight_layout()
     path = os.path.join(out_dir, "wood_share.png")
     fig.savefig(path, dpi=150)

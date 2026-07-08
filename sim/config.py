@@ -484,7 +484,6 @@ class TariffConfig:
     pv_clearness: float
     pv_t_rise_hr: float
     pv_t_set_hr: float
-    cap_kw: float
 
 
 TARIFF = TariffConfig(
@@ -520,10 +519,6 @@ TARIFF = TariffConfig(
                    "Sunset time used by the PV stub.",
                    "Earlier sunset shrinks the window where solar_following prices are cheap.",
                    tbd=True),
-    cap_kw=p("tariff", "cap_kw", 30.0, "kW",
-              "Grid/mini-grid aggregate demand cap used for the exceedance penalty.",
-              "Lower cap = exceedance probability rises for the same population -> tariffs scored harsher.",
-              tbd=True),
 )
 
 
@@ -532,18 +527,13 @@ TARIFF = TariffConfig(
 # ---------------------------------------------------------------------------
 @dataclass
 class ScoringConfig:
-    PI: float
     R: int
 
 
 SCORING = ScoringConfig(
-    PI=p("scoring", "PI", 5.0, "score/probability",
-         "Penalty weight on P_exceed in score = wood_share + PI * P_exceed.",
-         "Higher = the scoreboard cares much more about avoiding cap breaches than about wood share.",
-         tbd=True),
     R=p("scoring", "R", 200, "runs",
         "Number of independent Monte Carlo days simulated per tariff.",
-        "More runs = more stable P_exceed estimate (spec target: stable to +-0.02 across seeds), slower sweep.",
+        "More runs = a more stable wood_share estimate, at the cost of a slower sweep.",
         tbd=True),
 )
 

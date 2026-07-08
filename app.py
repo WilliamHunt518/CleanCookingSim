@@ -8,7 +8,7 @@ Design:
 - Sidebar = "how to run" (scenario, which tariffs to sweep, R, seed, ablation
   switches, the Run button). These are cheap execution settings, not model
   design, so they take effect immediately.
-- Parameters tab = "what to simulate" (gamma/lam/DELTA/tariff levels/PI/
+- Parameters tab = "what to simulate" (gamma/lam/DELTA/tariff levels/
   population mix). These live inside an st.form, so nothing changes until
   you explicitly press Save -- no on-the-fly reactivity here.
 - A staleness banner compares the live config against a snapshot taken at
@@ -42,8 +42,7 @@ def _snapshot(scenario_name, tariff_names, R, seed, no_cost, no_hunger, no_perso
         "persona_gamma_offsets": {p: dict(off) for p, off in config.PERSONAS.persona_gamma_offsets.items()},
         "persona_lam": {p: dict(lam) for p, lam in config.PERSONAS.persona_lam.items()},
         "DELTA": config.TIMING.DELTA,
-        "tariff": (config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi, config.TARIFF.cap_kw),
-        "PI": config.SCORING.PI,
+        "tariff": (config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi),
         "scenario": scenario_name, "tariffs": tuple(tariff_names), "R": R, "seed": seed,
         "no_cost": no_cost, "no_hunger": no_hunger, "no_personas": no_personas,
     }
@@ -110,7 +109,7 @@ tab_sim, tab_plots, tab_params, tab_explain = st.tabs(
 # ---------------------------------------------------------------------------
 with tab_sim:
     st.subheader("Scoreboard")
-    st.caption("Lower score wins. score = wood_share + PI * P_exceed")
+    st.caption("Sorted by wood_share ascending -- lower means fewer meals cooked on fire.")
     st.dataframe(board, width="stretch", hide_index=True)
 
     st.subheader("House map -- day playback")
@@ -144,7 +143,7 @@ with tab_sim:
     persona_masks = {name: (population.persona_idx == idx)
                       for idx, name in enumerate(population_mod.PERSONA_NAMES)}
     vmax = max(day.agent_power.max(), 1e-6)
-    day_max_kw = max(day.demand_kw.max(), config.TARIFF.cap_kw, 1e-6)
+    day_max_kw = max(day.demand_kw.max(), 1e-6)
     t_hr_full = np.arange(config.STATE.T) * config.STATE.block_minutes / 60.0
 
     # A literal house-shaped marker (square base + triangular roof) for households; school
@@ -154,12 +153,12 @@ with tab_sim:
     PERSONA_EDGE_COLORS = {"household": "tab:blue", "school": "tab:orange", "kiosk": "tab:green"}
     PERSONA_SIZE_MULT = {"household": 1.0, "school": 1.3, "kiosk": 1.15}
 
-    def _active_meals(block_idx: int) -> dict[int, int]:
-        """agent_idx -> 1-based meal index, for agents mid-cook at this block."""
+    def _active_meals(block_idx: int) -> dict[int, str]:
+        """agent_idx -> meal name, for agents mid-cook at this block."""
         active = {}
         for e in day.events:
             if e.start_block <= block_idx < e.start_block + e.duration_blocks:
-                active[e.agent_idx] = e.meal_idx0 + 1
+                active[e.agent_idx] = meals.MEAL_NAMES[e.meal_idx0]
         return active
 
     def _draw_house_map(block_idx: int):
@@ -175,9 +174,9 @@ with tab_sim:
                        cmap="hot_r", vmin=0, vmax=vmax, s=sizes[mask] * PERSONA_SIZE_MULT[name],
                        marker=PERSONA_MARKERS[name], edgecolors=PERSONA_EDGE_COLORS[name],
                        linewidths=1.3, label=name)
-        for agent_idx, meal_idx1 in active.items():
+        for agent_idx, meal_name in active.items():
             x, y = positions[agent_idx]
-            ax.annotate(f"Cooking {meal_idx1}", (x, y), xytext=(0, -11), textcoords="offset points",
+            ax.annotate(f"Cooking {meal_name}", (x, y), xytext=(0, -11), textcoords="offset points",
                         ha="center", fontsize=6, color="black",
                         bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.7))
         ax.set_title("color/size = kW draw", fontsize=9)
@@ -190,14 +189,12 @@ with tab_sim:
     def _draw_live_load_curve(block_idx: int):
         fig, ax = plt.subplots(figsize=(6.5, 2.0))
         ax.plot(t_hr_full[: block_idx + 1], day.demand_kw[: block_idx + 1], color="tab:red")
-        ax.axhline(config.TARIFF.cap_kw, color="black", linestyle=":", linewidth=1, label="cap")
         ax.axvline(block_idx * config.STATE.block_minutes / 60.0, color="gray", linewidth=0.8)
         ax.set_xlim(0, 24)
         ax.set_ylim(0, day_max_kw * 1.1)
         ax.set_xlabel("hour", fontsize=8)
         ax.set_ylabel("aggregate kW", fontsize=8)
         ax.tick_params(labelsize=7)
-        ax.legend(loc="upper right", fontsize=7)
         fig.tight_layout()
         return fig
 
@@ -216,8 +213,7 @@ with tab_sim:
 
         with info_ph.container():
             st.metric("Time", f"{hh:02d}:{mm:02d}")
-            st.metric("Total draw", f"{day.demand_kw[block_idx]:.2f} kW",
-                      delta=f"cap {config.TARIFF.cap_kw:g} kW", delta_color="off")
+            st.metric("Total draw", f"{day.demand_kw[block_idx]:.2f} kW")
             st.metric("Cooking now", f"{int(np.sum(power > 0))} agents")
             for name, mask in persona_masks.items():
                 st.metric(f"{name} kW", f"{power[mask].sum():.2f}")
@@ -366,18 +362,13 @@ with tab_params:
                               config.TIMING.DELTA, 0.01)
 
         st.markdown("#### Tariff")
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         with c1:
             p_bar_in = st.slider("p_bar", 0.05, 1.0, config.TARIFF.p_bar, 0.01)
         with c2:
             p_lo_in = st.slider("p_lo", 0.0, 1.0, config.TARIFF.p_lo, 0.01)
         with c3:
             p_hi_in = st.slider("p_hi", 0.0, 2.0, config.TARIFF.p_hi, 0.01)
-        with c4:
-            cap_kw_in = st.slider("cap_kw", 5.0, 100.0, config.TARIFF.cap_kw, 1.0)
-
-        st.markdown("#### Scoring")
-        PI_in = st.slider("PI (exceedance penalty weight)", 0.0, 20.0, config.SCORING.PI, 0.5)
 
         col_save, col_save_run = st.columns(2)
         save_clicked = col_save.form_submit_button("Save parameters", width="stretch")
@@ -406,9 +397,7 @@ with tab_params:
             "kiosk": {"breakfast": kiosk_lam_b, "lunch": kiosk_lam_l, "dinner": kiosk_lam_d},
         }
         config.TIMING.DELTA = delta_in
-        config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi, config.TARIFF.cap_kw = (
-            p_bar_in, p_lo_in, p_hi_in, cap_kw_in)
-        config.SCORING.PI = PI_in
+        config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi = p_bar_in, p_lo_in, p_hi_in
         st.success("Parameters saved.")
         if save_run_clicked:
             st.session_state["trigger_run"] = True
@@ -442,6 +431,35 @@ with tab_explain:
             "batch": meals.Z[:, population_mod.ATTR_ORDER.index("batch")],
         })
         st.dataframe(menu_df, width="stretch", hide_index=True)
+
+    st.divider()
+    st.subheader("How the two-stage decision works")
+    st.markdown(
+        "Every block, an agent goes through two stages. The worked example below fills in real "
+        "numbers for both -- read this first if the symbols aren't obvious.\n\n"
+        "**Stage 1 -- does it start cooking at all?** A *hazard logit* $\\ell_t$ is built by adding "
+        "four things: a time-of-day baseline $w(t)$ (three bell-shaped bumps, one per meal, each "
+        "peaking at that meal's typical clock time), an optional scenario nudge $\\eta_t$, a "
+        "persona-and-stage bias $\\lambda$ (this single number is what makes a school cook almost "
+        "only at lunch: a large negative $\\lambda$ at breakfast/dinner switches those stages off, "
+        "a large positive $\\lambda$ at lunch turns it up), and a hunger term "
+        "$\\alpha_0 \\cdot \\text{hunger}$. $\\ell_t$ on its own is not a probability -- it can be any "
+        "real number, very negative or very positive. Passing it through the *sigmoid* function "
+        "$\\sigma(x) = 1/(1+e^{-x})$ squashes it into an actual probability between 0 and 1; "
+        "multiplying by $\\Delta$ then scales that down further and caps the maximum chance of "
+        "firing in any single 5-minute block.\n\n"
+        "**Stage 2 -- which meal?** Every meal $k$ gets a utility $u_k$ combining: the dot product "
+        "$\\gamma \\cdot z_k$ (how much *this agent's* weights $\\gamma$ line up with meal $k$'s fixed "
+        "attributes $z_k$ -- taste, tradition, kid-appeal, batch potential, ingredient cost, prep "
+        "labour, kcal, fuel cost), a scenario bonus $\\eta_k$, a cost penalty "
+        "$-\\gamma_{\\text{cost}} \\cdot \\text{price} \\cdot e_k$ (exactly zero for fire-only meals, "
+        "since their $e_k=0$ -- the *only* channel through which the tariff affects behaviour), and a "
+        "hunger boost $\\alpha_k \\cdot \\text{hunger}$. The utilities have no meaning in isolation -- "
+        "only their size *relative* to each other matters. The softmax formula below turns those "
+        "relative sizes into an actual probability distribution over meals: exponentiating turns "
+        "utility differences into likelihood ratios, and dividing by the sum over every meal rescales "
+        "the result so all the probabilities add up to 1."
+    )
 
     st.divider()
     st.subheader("Worked example -- the exact arithmetic for one agent")

@@ -110,7 +110,6 @@ class TariffRunResult:
     price: np.ndarray
     events_all_runs: list[CookEvent]
     demand_curves: list[np.ndarray]
-    exceed_flags: list[bool]
     trace_rows: list[dict]
     daily_kwh_per_run: list[np.ndarray] = field(default_factory=list)  # each (n_agents,), per-agent kWh that day
 
@@ -134,13 +133,12 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
     for tname, tseed in zip(tariff_names, tariff_seeds):
         price = tariffs_mod.build_tariff(tname)
         run_seeds = tseed.spawn(R)
-        demand_curves, exceed_flags, all_events, trace_rows, daily_kwh_per_run = [], [], [], [], []
+        demand_curves, all_events, trace_rows, daily_kwh_per_run = [], [], [], []
         for r, rseed in enumerate(run_seeds):
             rng = np.random.default_rng(rseed)
             day = simulate_day(population, price, scenario, rng, no_hunger=no_hunger,
                                 trace_agent=trace_agent if r == 0 else None)
             demand_curves.append(day.demand_kw)
-            exceed_flags.append(bool(np.any(day.demand_kw > config.TARIFF.cap_kw)))
             all_events.extend(day.events)
             kwh = np.zeros(population.n_agents)
             for e in day.events:
@@ -149,6 +147,6 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
             if r == 0:
                 trace_rows = day.trace_rows
         results[tname] = TariffRunResult(tariff_name=tname, price=price, events_all_runs=all_events,
-                                          demand_curves=demand_curves, exceed_flags=exceed_flags,
+                                          demand_curves=demand_curves,
                                           trace_rows=trace_rows, daily_kwh_per_run=daily_kwh_per_run)
     return results, population
