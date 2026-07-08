@@ -70,8 +70,8 @@ STATE = StateConfig(
         "Number of 5-minute blocks in a 24h day (24*60/5).",
         "Derived from block_minutes; not an independent knob.",
         tbd=False),
-    K=p("state", "K", 6, "meals",
-        "Size of the fixed meal menu.",
+    K=p("state", "K", 18, "meals",
+        "Size of the fixed meal menu (must match len(MEALS) below).",
         "Structural -- add/remove rows in the meal table to change this.",
         tbd=False),
     tau_cap_hr=p("state", "tau_cap_hr", 24.0, "hours",
@@ -178,62 +178,130 @@ def nbar(t_hr: float) -> int:
 
 
 # ---------------------------------------------------------------------------
-# meals -- fixed menu (K=6). idx 1..6, matching the slot values written into h.
+# meals -- 18-meal menu transcribed from master_table_Z.md (Magadi/Kajiado West
+# meal feature matrix). idx 1..18, matching the slot values written into h.
+#
+# Decision features (gamma-weighted, see ATTR_ORDER in population.py): taste,
+# tradition, kid-acceptance, batch/leftover potential, ingredient cost,
+# active prep labour, and kcal (as a proxy for "how filling") are all given
+# directly by the source table; the eighth attribute, fuelcost, is *not* in
+# the source table as a gamma-weighted column -- it is reconstructed here
+# from the table's charcoal kg/KES column so that fire-only meals still carry
+# a real (if fixed, non-tariffed) cost, preserving the "wood is immune to the
+# grid tariff but not free" property. ing_cost/prep_min/kcal/charcoal_kes are
+# normalised by the *_MAX constants below so every gamma-weighted feature
+# sits on a roughly comparable ~0-1 scale, matching taste/tradition/kid/batch
+# (which the source table already gives on 0-1). This normalisation is a
+# modelling choice, not specified by master_table_Z.md, and is flagged tbd.
 # ---------------------------------------------------------------------------
 @dataclass
 class MealRow:
     idx: int
     name: str
-    e_kwh: float
-    dbar_min: float
-    taste: float
-    trad: float
-    effort: float
-    fuelcost: float
-    alpha_k: float
-    stage: str  # which of h's 3 slots this meal can fill: breakfast/lunch/dinner (all, in practice)
+    meal_type: str          # "ELEC" or "FIRE" (informational; fire_only is authoritative)
+    dbar_min: float          # cook duration, minutes
+    e_kwh: float             # grid energy per cook; 0 for fire-only meals
+    charcoal_kg: float
+    charcoal_kes: float
+    kcal: float
+    protein_g: float
+    carb_g: float
+    fat_g: float
+    ing_cost_kes: float
+    prep_min: float
+    taste: float             # 0-1
+    tradition: float         # 0-1
+    kid: float                # 0-1, kid-acceptance
+    batch: float              # 0-1, batch/leftover potential
+    fire_only: bool           # 1 = zero clean-cooking proposition (wood/charcoal only)
 
 
-def _meal(idx, name, e_kwh, dbar_min, taste, trad, effort, fuelcost, alpha_k):
-    return MealRow(
-        idx=idx, name=name,
-        e_kwh=p("meals", f"{name}.e_kwh", e_kwh, "kWh",
-                 f"Grid electrical energy drawn per cook of '{name}'.",
-                 "0 for wood/cold meals -> immune to the electricity tariff.", tbd=True),
-        dbar_min=p("meals", f"{name}.dbar_min", dbar_min, "minutes",
-                    f"Mean cook duration for '{name}'.",
-                    "Longer duration spreads the same energy over more blocks (lower average kW).", tbd=True),
-        taste=p("meals", f"{name}.taste", taste, "utils",
-                 f"Taste attribute of '{name}' (feeds gamma.z in the choice utility).",
-                 "Higher = more appealing regardless of cost/effort.", tbd=True),
-        trad=p("meals", f"{name}.trad", trad, "utils",
-                f"Traditionality attribute of '{name}'.",
-                "Higher = favoured by agents/scenarios with strong trad weight (e.g. festival_day).", tbd=True),
-        effort=p("meals", f"{name}.effort", effort, "utils",
-                  f"Effort attribute of '{name}' (should carry negative gamma weight).",
-                  "Higher effort = more deterred, all else equal.", tbd=True),
-        fuelcost=p("meals", f"{name}.fuelcost", fuelcost, "utils",
-                    f"Non-grid fuel cost attribute of '{name}' (e.g. charcoal/firewood spend; "
-                    "distinct from the grid tariff, which only applies via e_kwh).",
-                    "Higher = more deterred; this is how wood meals still cost the household something.",
-                    tbd=True),
-        alpha_k=p("meals", f"{name}.alpha_k", alpha_k, "logit/hunger-unit",
-                   f"Extra utility '{name}' gets per unit of hunger (Stage 2 boost).",
-                   "Positive only for big/filling meals -- makes them relatively more attractive when very hungry.",
-                   tbd=True),
-        stage="any",
-    )
+ING_COST_MAX_KES = p("meals", "ing_cost_max_kes", 150.0, "KES/serving",
+                      "Reference max used to normalise ing_cost_kes into the ~0-1 gamma-weighted "
+                      "ing_cost feature (150 = the priciest meal in master_table_Z.md, nyama choma).",
+                      "Lower max makes ing_cost saturate (hit 1.0) for cheaper meals too, flattening "
+                      "the cost signal between mid-priced dishes.", tbd=True)
+PREP_MIN_MAX = p("meals", "prep_min_max", 45.0, "minutes",
+                  "Reference max used to normalise prep_min into the ~0-1 gamma-weighted prep_min "
+                  "feature (45 = chapati, the most labour-intensive meal in the table).",
+                  "Lower max makes the labour penalty saturate for less demanding meals too.", tbd=True)
+KCAL_MAX = p("meals", "kcal_max", 800.0, "kcal/serving",
+             "Reference max used to normalise kcal into the ~0-1 gamma-weighted kcal feature, and "
+             "to scale ALPHA_SCALE-based hunger boosts (800 = ugali_sukuma_beef_stew, the richest meal).",
+             "Lower max makes both the kcal appeal term and the hunger boost saturate sooner.", tbd=True)
+CHARCOAL_KES_MAX = p("meals", "charcoal_kes_max", 108.0, "KES/serving",
+                      "Reference max used to normalise charcoal_kes into the fuelcost feature for "
+                      "fire-only meals (108 = the fire-only bone soup, the priciest charcoal cost).",
+                      "Lower max makes the fuelcost disincentive saturate for cheaper fire meals too.",
+                      tbd=True)
+ALPHA_SCALE = p("meals", "alpha_scale", 1.0, "logit/hunger-unit (at kcal_norm=1)",
+                 "Scales kcal_norm into each meal's alpha_k hunger boost (alpha_k = ALPHA_SCALE * "
+                 "kcal/KCAL_MAX) -- richer meals satisfy hunger more, instead of hand-flagging "
+                 "individual meals as 'big'.",
+                 "Higher = kcal-rich meals become dramatically more attractive the hungrier an agent is.",
+                 tbd=True)
 
 
+def _meal(idx, name, meal_type, dbar_min, e_kwh, charcoal_kg, charcoal_kes, kcal, protein_g, carb_g,
+          fat_g, ing_cost_kes, prep_min, taste, tradition, kid, batch, fire_only) -> MealRow:
+    return MealRow(idx=idx, name=name, meal_type=meal_type, dbar_min=dbar_min, e_kwh=e_kwh,
+                   charcoal_kg=charcoal_kg, charcoal_kes=charcoal_kes, kcal=kcal, protein_g=protein_g,
+                   carb_g=carb_g, fat_g=fat_g, ing_cost_kes=ing_cost_kes, prep_min=prep_min,
+                   taste=taste, tradition=tradition, kid=kid, batch=batch, fire_only=bool(fire_only))
+
+
+# name, type, duration_min, e_kwh, charcoal_kg, charcoal_kes, kcal, P, C, F, ing_cost, prep_min,
+# taste, tradition, kid, batch, fire_only -- transcribed verbatim from master_table_Z.md.
 MEALS: list[MealRow] = [
-    _meal(1, "big_e_cook", 1.5, 45, 0.8, 0.0, 0.5, 0.0, 0.8),
-    _meal(2, "small_e_cook", 0.6, 20, 0.5, 0.0, 0.3, 0.0, 0.0),
-    _meal(3, "quick_e_snack", 0.2, 10, 0.3, 0.0, 0.1, 0.0, 0.0),
-    _meal(4, "big_wood_cook", 0.0, 60, 0.7, 1.0, 0.9, 0.6, 0.8),
-    _meal(5, "small_wood", 0.0, 30, 0.4, 1.0, 0.7, 0.4, 0.0),
-    _meal(6, "cold_no_cook", 0.0, 5, 0.2, 0.0, 0.05, 0.1, 0.0),
+    _meal(1, "uji_honey_sweetpotato", "ELEC", 45, 0.75, 0.4, 24, 280, 7, 60, 2, 25, 10,
+          0.50, 0.80, 1.00, 0.40, 0),
+    _meal(2, "mahamri_mbaazi_za_nazi", "ELEC", 60, 1.20, 0.6, 36, 780, 21, 112, 27, 60, 40,
+          0.80, 0.40, 0.90, 0.80, 0),
+    _meal(3, "chai_roasted_sweetpotato_cassava", "FIRE", 45, 0.0, 0.6, 36, 360, 6, 70, 6, 30, 10,
+          0.55, 0.85, 0.80, 0.30, 1),
+    _meal(4, "githeri_avocado_epc", "ELEC", 60, 1.00, 0.8, 48, 640, 22, 92, 21, 45, 20,
+          0.55, 0.50, 0.70, 1.00, 0),
+    _meal(5, "ugali_ndengu_stew", "ELEC", 60, 1.20, 0.6, 36, 620, 26, 108, 9, 40, 15,
+          0.60, 0.55, 0.70, 0.80, 0),
+    _meal(6, "ugali_sukuma_beef_stew", "ELEC", 90, 2.25, 0.8, 48, 800, 37, 98, 27, 90, 30,
+          0.80, 0.60, 0.80, 0.60, 0),
+    _meal(7, "ugali_kuku_kienyeji_managu", "ELEC", 90, 2.10, 0.9, 54, 770, 42, 88, 25, 110, 35,
+          0.90, 0.70, 0.90, 0.50, 0),
+    _meal(8, "chapati_maharagwe_ya_nazi", "ELEC", 90, 2.40, 0.9, 54, 680, 21, 92, 25, 55, 45,
+          0.85, 0.50, 0.95, 0.70, 0),
+    _meal(9, "ugali_fried_tilapia_kachumbari", "ELEC", 45, 1.13, 0.5, 30, 730, 46, 74, 28, 100, 20,
+          0.85, 0.50, 0.60, 0.20, 0),
+    _meal(10, "mukimo_beef_stew", "ELEC", 75, 1.88, 0.8, 48, 790, 36, 95, 27, 85, 30,
+          0.70, 0.60, 0.80, 0.50, 0),
+    _meal(11, "matoke_beef", "ELEC", 45, 0.90, 0.5, 30, 420, 19, 58, 13, 60, 20,
+          0.60, 0.50, 0.70, 0.50, 0),
+    _meal(12, "motori_bone_soup_cassava", "ELEC", 150, 2.00, 1.4, 84, 550, 28, 72, 16, 70, 15,
+          0.70, 1.00, 0.50, 0.70, 0),
+    _meal(13, "nyama_choma_oven_kachumbari", "ELEC", 60, 2.00, 1.5, 90, 385, 45, 4, 21, 150, 15,
+          0.90, 0.70, 0.60, 0.50, 0),
+    _meal(14, "nyama_choma_open_fire", "FIRE", 60, 0.0, 1.5, 90, 385, 45, 4, 21, 150, 15,
+          1.00, 1.00, 0.60, 0.50, 1),
+    _meal(15, "tilapia_catfish_grilled_fire", "FIRE", 30, 0.0, 0.7, 42, 280, 40, 2, 12, 90, 15,
+          0.80, 0.50, 0.50, 0.20, 1),
+    _meal(16, "motori_bone_soup_cassava_fire", "FIRE", 150, 0.0, 1.8, 108, 550, 28, 72, 16, 70, 15,
+          0.70, 1.00, 0.50, 0.70, 1),
+    _meal(17, "ugali_sukuma_side", "ELEC", 45, 1.13, 0.5, 30, 410, 11, 77, 7, 30, 15,
+          0.60, 0.60, 0.80, 0.30, 0),
+    _meal(18, "ugali_kachumbari_side", "ELEC", 30, 0.75, 0.4, 24, 320, 8, 68, 3, 20, 10,
+          0.55, 0.60, 0.80, 0.30, 0),
 ]
-WOOD_MEAL_INDICES = (4, 5)
+
+_MEAL_TABLE_NOTE = p(
+    "meals", "meal_table", f"{len(MEALS)} meals (see sim/config.py MEALS list)", "n/a",
+    "The full 18-meal feature table transcribed from master_table_Z.md (Magadi/Kajiado West meal "
+    "feature matrix): physical/cost columns (duration, kWh, charcoal kg/KES), nutrition (kcal, "
+    "protein/carb/fat), and decision features (taste, tradition, kid-acceptance, batch potential, "
+    "ingredient cost, prep labour). Individual meal values aren't tracked as separate glossary rows "
+    "(300+ would swamp `explain`/`audit`) but the whole table is still a calibration placeholder.",
+    "Per master_table_Z.md: 'All decision-column values are calibration placeholders -- priced at "
+    "rough 2026 local market rates and scored by judgement. Replace with survey data (KAOP or "
+    "household interviews) when available; the Z structure and lambda.z + gamma machinery don't change.'",
+    tbd=True)
 
 MEAL_DURATION_SIGMA_MIN = p("meals", "duration_sigma_min", 8.0, "minutes",
                               "Std dev of per-cook duration draw D ~ Normal(Dbar_k, sigma).",
@@ -262,7 +330,16 @@ PREHEAT_POWER_MULT = p("meals", "preheat_power_mult", 2.0, "multiple of boxcar p
 
 
 # ---------------------------------------------------------------------------
-# personas -- household / school, as sparse overrides on a base
+# personas -- household / school / kiosk, as sparse additive offsets on a base
+#
+# household is the base persona (lambda in master_table_Z.md's "house (base
+# lambda)" column). school and kiosk are "group offsets" (gamma) ADDED on top
+# of that base per feature -- a persona with no entry for a feature simply
+# inherits the household value unchanged. This matches master_table_Z.md's
+# own framing ("gamma upweights/downweights ...") and its dash ("--") entries
+# for unspecified feature/persona combinations. lam (Stage 1 hazard bias,
+# timing) is a separate, orthogonal REPLACE-semantics override -- unrelated
+# to gamma/Z and not covered by master_table_Z.md at all.
 # ---------------------------------------------------------------------------
 @dataclass
 class PersonaConfig:
@@ -270,22 +347,31 @@ class PersonaConfig:
     base_gamma_cost: float
     sigma_ind: float
     base_lam: dict
-    school_overrides: dict
+    persona_gamma_offsets: dict  # {persona_name: {feature: additive delta}}
+    persona_lam: dict            # {persona_name: {stage: replacement value}}
     mix: dict
 
 
 PERSONAS = PersonaConfig(
     base_gamma=p("personas", "base_gamma",
-                 {"taste": 1.0, "trad": 0.3, "effort": -0.8, "fuelcost": -1.0}, "utils/attribute-unit",
-                 "Household taste-weight vector applied to meal attributes z_k in the choice utility.",
-                 "effort and fuelcost should stay negative (they are costs); raising |effort|/|fuelcost| "
-                 "makes agents avoid demanding/costly meals more strongly.",
+                 {"taste": 1.0, "tradition": 0.6, "kid": 0.4, "batch": 0.3, "ing_cost": -0.8,
+                  "prep_min": -0.4, "kcal": 0.2, "fuelcost": -0.8},
+                 "utils/attribute-unit",
+                 "Household base taste-weight vector (lambda in master_table_Z.md) applied to meal "
+                 "attributes z_k. First 7 features + values are transcribed directly from "
+                 "master_table_Z.md's 'house (base lambda)' column; fuelcost has no source-table row "
+                 "(the table doesn't list a gamma-weighted fuel-cost feature) so it reuses this "
+                 "project's earlier placeholder to keep fire meals non-free.",
+                 "ing_cost/prep_min should stay negative (they are costs); raising |ing_cost|/|prep_min| "
+                 "makes agents avoid expensive/demanding meals more strongly.",
                  tbd=True),
     base_gamma_cost=p("personas", "base_gamma_cost", 1.2, "utils per (currency/kWh * kWh)",
                        "Household price sensitivity: weight on -price(t)*e_k in the choice utility. "
-                       "THE only channel through which the tariff affects behaviour.",
+                       "THE only channel through which the grid tariff affects behaviour. Not part of "
+                       "master_table_Z.md (that table has no tariff/price-sensitivity concept); shared "
+                       "across all personas since the source table gives no override.",
                        "The single most important knob for tariff response -- raise it and high prices "
-                       "push agents toward wood/cold meals much more sharply.",
+                       "push agents toward fire-only meals much more sharply.",
                        tbd=True),
     sigma_ind=p("personas", "sigma_ind", 0.15, "utils (std dev)",
                  "Std dev of per-agent individual variation around persona-mean gamma and gamma_cost, "
@@ -297,19 +383,37 @@ PERSONAS = PersonaConfig(
                "Household per-stage firing-hazard bias lam[persona][stage], added into Stage 1's logit.",
                "Zero for the reference household persona (no stage is suppressed or boosted).",
                tbd=True),
-    school_overrides=p("personas", "school_overrides",
-                        {"gamma": {"trad": 0.0}, "lam": {"breakfast": -6.0, "lunch": 2.0, "dinner": -6.0}},
-                        "n/a",
-                        "Sparse overrides applied on top of the household base for the 'school' persona: "
-                        "zero trad weight (no attachment to traditional wood cooking), breakfast and dinner "
-                        "hazard effectively switched off (-6, same magnitude as the overnight base logit), and "
-                        "a strongly boosted midday hazard (+2.0 at lunch) -- schools cook an essentially "
-                        "unimodal, lunch-only day (one big canteen meal), not three meals like a household.",
-                        "Encodes 'schools cook one big lunch and nothing else' without a separate model.",
-                        tbd=True),
-    mix=p("personas", "mix", {"household": 95, "school": 5}, "agent count",
-          "Population composition.",
-          "More schools shifts the aggregate load curve toward a midday peak.",
+    persona_gamma_offsets=p(
+        "personas", "persona_gamma_offsets",
+        {"school": {"taste": 0.3, "kid": 1.2, "batch": 1.5, "ing_cost": -1.5},
+         "kiosk": {"taste": 1.4, "batch": 1.0, "prep_min": -0.8}},
+        "utils/attribute-unit (additive delta on the household base)",
+        "Group offsets transcribed from master_table_Z.md's 'school gamma' / 'kiosk gamma' columns: "
+        "school upweights kid-acceptance and batch potential and is far more ingredient-cost averse "
+        "(institutional budget); kiosk (mama ntilie / small food vendor) upweights taste even further "
+        "and is much more prep-labour averse (cooks at commercial scale/pace, batches instead). "
+        "Note: master_table_Z.md's prose says school 'downweights taste' but its own table lists "
+        "school's taste offset as +0.3 (not negative) -- implemented per the table's number, flagging "
+        "the discrepancy for review. Unspecified feature/persona pairs (tradition, kcal, fuelcost for "
+        "both; ing_cost/kid for kiosk) get a 0 offset, i.e. inherit the household base unchanged.",
+        "Larger |offset| = that persona diverges further from household on that one feature only.",
+        tbd=True),
+    persona_lam=p(
+        "personas", "persona_lam",
+        {"school": {"breakfast": -6.0, "lunch": 2.0, "dinner": -6.0}, "kiosk": {}},
+        "logit (replacement value, not additive)",
+        "Per-stage hazard-bias overrides: school's breakfast/dinner are switched off (-6, matching the "
+        "overnight base logit) with a strongly boosted lunch (+2.0), making it essentially unimodal at "
+        "lunch (one canteen meal/day). kiosk has no override at all (empty dict) -- master_table_Z.md "
+        "gives no vendor operating-hours data, so it currently inherits household's flat, no-bias "
+        "timing across all 3 stages. Revisit once real kiosk trading-hours data is available.",
+        "An empty dict for a persona means 'same timing as household' -- not necessarily realistic for "
+        "a vendor that might only trade at lunch/dinner.",
+        tbd=True),
+    mix=p("personas", "mix", {"household": 80, "school": 10, "kiosk": 10}, "agent count",
+          "Population composition across the three personas.",
+          "More schools shifts the aggregate load curve toward a midday peak; more kiosks shift it "
+          "toward whatever timing kiosk ends up with (currently household-like, see persona_lam).",
           tbd=True),
 )
 
@@ -356,9 +460,10 @@ FESTIVAL_DAY_SCENARIO = ScenarioConfig(
                         "Larger centre_shift_hr / height = dinner drifts later / more sharply.",
                         tbd=True),
     eta_k=p("scenario", "festival_day.eta_k",
-            {"big_e_cook": 0.5, "big_wood_cook": 1.0}, "utils",
-            "Flat utility bonus added to the two 'big meal' options, biggest for the traditional wood one, "
-            "representing festival appeal.",
+            {"nyama_choma_oven_kachumbari": 0.5, "nyama_choma_open_fire": 1.0}, "utils",
+            "Flat utility bonus added to the two nyama choma (grilled meat) options -- the classic "
+            "Kenyan celebration dish -- biggest for the traditional open-fire one, representing "
+            "festival appeal.",
             "Raises the odds those meals are chosen conditional on firing.",
             tbd=True),
 )

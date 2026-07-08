@@ -39,8 +39,8 @@ def _snapshot(scenario_name, tariff_names, R, seed, no_cost, no_hunger, no_perso
         "n_agents": config.N_AGENTS, "mix": dict(config.PERSONAS.mix),
         "gamma": dict(config.PERSONAS.base_gamma), "gamma_cost": config.PERSONAS.base_gamma_cost,
         "sigma_ind": config.PERSONAS.sigma_ind,
-        "school_overrides": {"gamma": dict(config.PERSONAS.school_overrides["gamma"]),
-                              "lam": dict(config.PERSONAS.school_overrides["lam"])},
+        "persona_gamma_offsets": {p: dict(off) for p, off in config.PERSONAS.persona_gamma_offsets.items()},
+        "persona_lam": {p: dict(lam) for p, lam in config.PERSONAS.persona_lam.items()},
         "DELTA": config.TIMING.DELTA,
         "tariff": (config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi, config.TARIFF.cap_kw),
         "PI": config.SCORING.PI,
@@ -141,14 +141,18 @@ with tab_sim:
         st.session_state[layout_key] = np.column_stack([xs, ys])
     positions = st.session_state[layout_key]
 
-    household_mask = population.persona_idx == 0
-    school_mask = ~household_mask
+    persona_masks = {name: (population.persona_idx == idx)
+                      for idx, name in enumerate(population_mod.PERSONA_NAMES)}
     vmax = max(day.agent_power.max(), 1e-6)
     day_max_kw = max(day.demand_kw.max(), config.TARIFF.cap_kw, 1e-6)
     t_hr_full = np.arange(config.STATE.T) * config.STATE.block_minutes / 60.0
 
-    # A literal house-shaped marker (square base + triangular roof) for households.
+    # A literal house-shaped marker (square base + triangular roof) for households; school
+    # and kiosk get distinct shapes so all three personas are visually unambiguous.
     HOUSE_MARKER = Path([(-1, -1), (1, -1), (1, 0.15), (0, 1), (-1, 0.15), (-1, -1)], closed=True)
+    PERSONA_MARKERS = {"household": HOUSE_MARKER, "school": "s", "kiosk": "^"}
+    PERSONA_EDGE_COLORS = {"household": "tab:blue", "school": "tab:orange", "kiosk": "tab:green"}
+    PERSONA_SIZE_MULT = {"household": 1.0, "school": 1.3, "kiosk": 1.15}
 
     def _active_meals(block_idx: int) -> dict[int, int]:
         """agent_idx -> 1-based meal index, for agents mid-cook at this block."""
@@ -164,12 +168,13 @@ with tab_sim:
         sizes = 70 + 260 * (power / vmax)
 
         fig, ax = plt.subplots(figsize=(4.6, 4.6))
-        ax.scatter(positions[household_mask, 0], positions[household_mask, 1], c=power[household_mask],
-                   cmap="hot_r", vmin=0, vmax=vmax, s=sizes[household_mask], marker=HOUSE_MARKER,
-                   edgecolors="tab:blue", linewidths=1.3, label="household")
-        ax.scatter(positions[school_mask, 0], positions[school_mask, 1], c=power[school_mask],
-                   cmap="hot_r", vmin=0, vmax=vmax, s=sizes[school_mask] * 1.3, marker="s",
-                   edgecolors="tab:orange", linewidths=1.3, label="school")
+        for name, mask in persona_masks.items():
+            if not np.any(mask):
+                continue
+            ax.scatter(positions[mask, 0], positions[mask, 1], c=power[mask],
+                       cmap="hot_r", vmin=0, vmax=vmax, s=sizes[mask] * PERSONA_SIZE_MULT[name],
+                       marker=PERSONA_MARKERS[name], edgecolors=PERSONA_EDGE_COLORS[name],
+                       linewidths=1.3, label=name)
         for agent_idx, meal_idx1 in active.items():
             x, y = positions[agent_idx]
             ax.annotate(f"Cooking {meal_idx1}", (x, y), xytext=(0, -11), textcoords="offset points",
@@ -214,8 +219,8 @@ with tab_sim:
             st.metric("Total draw", f"{day.demand_kw[block_idx]:.2f} kW",
                       delta=f"cap {config.TARIFF.cap_kw:g} kW", delta_color="off")
             st.metric("Cooking now", f"{int(np.sum(power > 0))} agents")
-            st.metric("Household kW", f"{power[household_mask].sum():.2f}")
-            st.metric("School kW", f"{power[school_mask].sum():.2f}")
+            for name, mask in persona_masks.items():
+                st.metric(f"{name} kW", f"{power[mask].sum():.2f}")
 
         fig_map = _draw_house_map(block_idx)
         map_ph.pyplot(fig_map)
@@ -252,23 +257,41 @@ with tab_params:
 
     with st.form("params_form"):
         st.markdown("#### Population")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
+        mix_now = config.PERSONAS.mix
+        mix_total = sum(mix_now.values())
         with c1:
             n_agents_in = st.slider("Number of agents", 20, 300, config.N_AGENTS, step=10)
         with c2:
-            current_school_pct = 100 * config.PERSONAS.mix["school"] / sum(config.PERSONAS.mix.values())
-            pct_school_in = st.slider("School share (%)", 0, 40, int(round(current_school_pct)), step=1)
+            pct_school_in = st.slider("School share (%)", 0, 40,
+                                       int(round(100 * mix_now["school"] / mix_total)), step=1)
+        with c3:
+            pct_kiosk_in = st.slider("Kiosk share (%)", 0, 40,
+                                      int(round(100 * mix_now["kiosk"] / mix_total)), step=1)
+        st.caption("Household gets whatever's left of the 100% after school + kiosk.")
 
-        st.markdown("#### Household persona -- gamma (Stage 2: which meal)")
+        st.markdown("#### Household persona -- gamma (Stage 2: which meal), the base every "
+                    "persona's offsets sit on top of")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             taste_in = st.slider("taste", -2.0, 2.0, config.PERSONAS.base_gamma["taste"], 0.05)
         with c2:
-            trad_in = st.slider("trad", -2.0, 2.0, config.PERSONAS.base_gamma["trad"], 0.05)
+            tradition_in = st.slider("tradition", -2.0, 2.0, config.PERSONAS.base_gamma["tradition"], 0.05)
         with c3:
-            effort_in = st.slider("effort (keep negative)", -2.0, 2.0, config.PERSONAS.base_gamma["effort"], 0.05)
+            kid_in = st.slider("kid (kid-acceptance)", -2.0, 2.0, config.PERSONAS.base_gamma["kid"], 0.05)
         with c4:
-            fuelcost_in = st.slider("fuelcost (keep negative)", -2.0, 2.0,
+            batch_in = st.slider("batch (leftover potential)", -2.0, 2.0, config.PERSONAS.base_gamma["batch"], 0.05)
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            ing_cost_in = st.slider("ing_cost (keep negative)", -3.0, 1.0,
+                                     config.PERSONAS.base_gamma["ing_cost"], 0.05)
+        with c2:
+            prep_min_in = st.slider("prep_min (keep negative)", -3.0, 1.0,
+                                     config.PERSONAS.base_gamma["prep_min"], 0.05)
+        with c3:
+            kcal_in = st.slider("kcal", -2.0, 2.0, config.PERSONAS.base_gamma["kcal"], 0.05)
+        with c4:
+            fuelcost_in = st.slider("fuelcost (keep negative)", -3.0, 1.0,
                                      config.PERSONAS.base_gamma["fuelcost"], 0.05)
         c1, c2 = st.columns(2)
         with c1:
@@ -278,20 +301,65 @@ with tab_params:
             sigma_ind_in = st.slider("sigma_ind (individual variation)", 0.0, 0.5,
                                       config.PERSONAS.sigma_ind, 0.01)
 
-        st.markdown("#### School persona -- overrides on the household base")
-        school_trad_in = st.slider("school trad weight", -1.0, 1.0,
-                                    config.PERSONAS.school_overrides["gamma"]["trad"], 0.05)
-        lam_now = config.PERSONAS.school_overrides["lam"]
+        st.markdown("#### School persona -- gamma offsets (additive on the household base) + timing")
+        school_off = config.PERSONAS.persona_gamma_offsets.get("school", {})
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            school_taste_off = st.slider("taste offset", -2.0, 2.0, school_off.get("taste", 0.0), 0.05,
+                                          key="school_taste_off")
+        with c2:
+            school_kid_off = st.slider("kid offset", -2.0, 2.0, school_off.get("kid", 0.0), 0.05,
+                                        key="school_kid_off")
+        with c3:
+            school_batch_off = st.slider("batch offset", -2.0, 2.0, school_off.get("batch", 0.0), 0.05,
+                                          key="school_batch_off")
+        with c4:
+            school_ing_cost_off = st.slider("ing_cost offset", -3.0, 3.0, school_off.get("ing_cost", 0.0), 0.05,
+                                             key="school_ing_cost_off")
+        school_lam_now = config.PERSONAS.persona_lam.get("school", {})
         c1, c2, c3 = st.columns(3)
         with c1:
-            lam_b_in = st.slider("lam: breakfast (Stage 1: whether it fires)", -6.0, 3.0,
-                                  lam_now.get("breakfast", 0.0), 0.5)
+            school_lam_b = st.slider("lam: breakfast", -6.0, 3.0, school_lam_now.get("breakfast", 0.0), 0.5,
+                                      key="school_lam_b")
         with c2:
-            lam_l_in = st.slider("lam: lunch", -6.0, 3.0, lam_now.get("lunch", 0.0), 0.5)
+            school_lam_l = st.slider("lam: lunch", -6.0, 3.0, school_lam_now.get("lunch", 0.0), 0.5,
+                                      key="school_lam_l")
         with c3:
-            lam_d_in = st.slider("lam: dinner", -6.0, 3.0, lam_now.get("dinner", 0.0), 0.5)
-        st.caption("More negative lam = that stage effectively switched off (-6 ~ off, matching the "
-                   "overnight base logit). This is what makes schools unimodal at lunch.")
+            school_lam_d = st.slider("lam: dinner", -6.0, 3.0, school_lam_now.get("dinner", 0.0), 0.5,
+                                      key="school_lam_d")
+        st.caption("Unlisted features (tradition/prep_min/kcal/fuelcost) get 0 offset -- school inherits "
+                   "the household value on those. lam is a per-stage REPLACEMENT (not additive): "
+                   "-6 ~ that stage effectively off, matching the overnight base logit -- this is what "
+                   "makes schools unimodal at lunch.")
+
+        st.markdown("#### Kiosk persona (mama ntilie / food vendor) -- gamma offsets + timing")
+        kiosk_off = config.PERSONAS.persona_gamma_offsets.get("kiosk", {})
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            kiosk_taste_off = st.slider("taste offset", -2.0, 2.0, kiosk_off.get("taste", 0.0), 0.05,
+                                         key="kiosk_taste_off")
+        with c2:
+            kiosk_batch_off = st.slider("batch offset", -2.0, 2.0, kiosk_off.get("batch", 0.0), 0.05,
+                                         key="kiosk_batch_off")
+        with c3:
+            kiosk_prep_min_off = st.slider("prep_min offset", -3.0, 3.0, kiosk_off.get("prep_min", 0.0), 0.05,
+                                            key="kiosk_prep_min_off")
+        with c4:
+            kiosk_ing_cost_off = st.slider("ing_cost offset", -3.0, 3.0, kiosk_off.get("ing_cost", 0.0), 0.05,
+                                            key="kiosk_ing_cost_off")
+        kiosk_lam_now = config.PERSONAS.persona_lam.get("kiosk", {})
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            kiosk_lam_b = st.slider("lam: breakfast", -6.0, 3.0, kiosk_lam_now.get("breakfast", 0.0), 0.5,
+                                     key="kiosk_lam_b")
+        with c2:
+            kiosk_lam_l = st.slider("lam: lunch", -6.0, 3.0, kiosk_lam_now.get("lunch", 0.0), 0.5,
+                                     key="kiosk_lam_l")
+        with c3:
+            kiosk_lam_d = st.slider("lam: dinner", -6.0, 3.0, kiosk_lam_now.get("dinner", 0.0), 0.5,
+                                     key="kiosk_lam_d")
+        st.caption("master_table_Z.md gives no kiosk operating-hours data -- lam defaults to 0 "
+                   "(household-like timing) until you set otherwise.")
 
         st.markdown("#### Timing")
         delta_in = st.slider("DELTA (hazard scale -- how often anyone cooks at all)", 0.01, 0.5,
@@ -318,15 +386,25 @@ with tab_params:
 
     if save_clicked or save_run_clicked:
         n_school = round(n_agents_in * pct_school_in / 100)
+        n_kiosk = round(n_agents_in * pct_kiosk_in / 100)
+        n_household = max(0, n_agents_in - n_school - n_kiosk)
         config.N_AGENTS = n_agents_in
-        config.PERSONAS.mix = {"household": n_agents_in - n_school, "school": n_school}
-        config.PERSONAS.base_gamma = {"taste": taste_in, "trad": trad_in, "effort": effort_in,
-                                       "fuelcost": fuelcost_in}
+        config.PERSONAS.mix = {"household": n_household, "school": n_school, "kiosk": n_kiosk}
+        config.PERSONAS.base_gamma = {"taste": taste_in, "tradition": tradition_in, "kid": kid_in,
+                                       "batch": batch_in, "ing_cost": ing_cost_in, "prep_min": prep_min_in,
+                                       "kcal": kcal_in, "fuelcost": fuelcost_in}
         config.PERSONAS.base_gamma_cost = gamma_cost_in
         config.PERSONAS.sigma_ind = sigma_ind_in
-        config.PERSONAS.school_overrides = {"gamma": {"trad": school_trad_in},
-                                             "lam": {"breakfast": lam_b_in, "lunch": lam_l_in,
-                                                     "dinner": lam_d_in}}
+        config.PERSONAS.persona_gamma_offsets = {
+            "school": {"taste": school_taste_off, "kid": school_kid_off, "batch": school_batch_off,
+                       "ing_cost": school_ing_cost_off},
+            "kiosk": {"taste": kiosk_taste_off, "batch": kiosk_batch_off, "prep_min": kiosk_prep_min_off,
+                      "ing_cost": kiosk_ing_cost_off},
+        }
+        config.PERSONAS.persona_lam = {
+            "school": {"breakfast": school_lam_b, "lunch": school_lam_l, "dinner": school_lam_d},
+            "kiosk": {"breakfast": kiosk_lam_b, "lunch": kiosk_lam_l, "dinner": kiosk_lam_d},
+        }
         config.TIMING.DELTA = delta_in
         config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi, config.TARIFF.cap_kw = (
             p_bar_in, p_lo_in, p_hi_in, cap_kw_in)
@@ -350,6 +428,21 @@ with tab_explain:
                                  "meaning": r.meaning, "effect": r.effect} for r in rows])
             st.dataframe(df, width="stretch", hide_index=True)
 
+    with st.expander(f"Meal menu ({meals.K} meals, from master_table_Z.md)"):
+        st.caption("Full source-table data per meal -- physical/cost and nutrition columns aren't "
+                   "gamma-weighted (except kcal), but are shown here for reference.")
+        menu_df = pd.DataFrame({
+            "meal": meals.MEAL_NAMES, "type": meals.MEAL_TYPE, "fire_only": meals.WOOD_MASK,
+            "duration_min": [m.dbar_min for m in config.MEALS], "e_kwh": meals.E_KWH,
+            "charcoal_kes": meals.CHARCOAL_KES, "ing_cost_kes": meals.ING_COST_KES,
+            "kcal": meals.KCAL, "protein_g": meals.PROTEIN_G, "carb_g": meals.CARB_G, "fat_g": meals.FAT_G,
+            "taste": meals.Z[:, population_mod.ATTR_ORDER.index("taste")],
+            "tradition": meals.Z[:, population_mod.ATTR_ORDER.index("tradition")],
+            "kid": meals.Z[:, population_mod.ATTR_ORDER.index("kid")],
+            "batch": meals.Z[:, population_mod.ATTR_ORDER.index("batch")],
+        })
+        st.dataframe(menu_df, width="stretch", hide_index=True)
+
     st.divider()
     st.subheader("Worked example -- the exact arithmetic for one agent")
     st.caption("Pick a persona, a time, a price, and a hunger state, and see every term substituted "
@@ -357,7 +450,7 @@ with tab_explain:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        ex_persona = st.selectbox("Persona", ["household", "school"])
+        ex_persona = st.selectbox("Persona", population_mod.PERSONA_NAMES)
     with c2:
         ex_hour = st.slider("Hour of day", 0.0, 24.0, 19.0, 0.25)
     with c3:
@@ -411,6 +504,9 @@ with tab_explain:
     hunger2 = max(0, nb2 - ex_n) + config.HUNGER.kappa * ex_tau
     eta_k = agent.eta_k_vector(scenario_obj)
 
+    st.caption("ing_cost/prep_min/kcal/fuelcost are pre-normalised to ~0-1 (see ING_COST_MAX_KES etc. "
+               "in the glossary above) before gamma is applied -- the table below shows that "
+               "normalised z value x gamma, per attribute.")
     rows = []
     for k, name in enumerate(meals.MEAL_NAMES):
         z = meals.Z[k]
@@ -419,19 +515,16 @@ with tab_explain:
         cost_term = -gamma_cost_val * ex_price * meals.E_KWH[k]
         hunger_term = meals.ALPHA_K[k] * hunger2
         u = appeal + float(eta_k[k]) + cost_term + hunger_term
-        rows.append({
-            "meal": name,
-            "taste x g_taste": f"{z[0]:.2f} x {gamma_vec[0]:.2f} = {appeal_terms[0]:.3f}",
-            "trad x g_trad": f"{z[1]:.2f} x {gamma_vec[1]:.2f} = {appeal_terms[1]:.3f}",
-            "effort x g_effort": f"{z[2]:.2f} x {gamma_vec[2]:.2f} = {appeal_terms[2]:.3f}",
-            "fuelcost x g_fuelcost": f"{z[3]:.2f} x {gamma_vec[3]:.2f} = {appeal_terms[3]:.3f}",
-            "appeal (sum)": round(appeal, 3),
-            "eta_k": round(float(eta_k[k]), 3),
-            "cost = -g_cost x price x e_k": f"-{gamma_cost_val:.2f} x {ex_price:.2f} x {meals.E_KWH[k]:.2f}"
-                                             f" = {cost_term:.3f}",
-            "hunger_term = alpha_k x hunger": f"{meals.ALPHA_K[k]:.2f} x {hunger2:.3f} = {hunger_term:.3f}",
-            "u (total)": round(u, 3),
-        })
+        row = {"meal": name}
+        for a, attr in enumerate(population_mod.ATTR_ORDER):
+            row[f"{attr} x g_{attr}"] = f"{z[a]:.2f} x {gamma_vec[a]:.2f} = {appeal_terms[a]:.3f}"
+        row["appeal (sum)"] = round(appeal, 3)
+        row["eta_k"] = round(float(eta_k[k]), 3)
+        row["cost = -g_cost x price x e_k"] = (f"-{gamma_cost_val:.2f} x {ex_price:.2f} x "
+                                                f"{meals.E_KWH[k]:.2f} = {cost_term:.3f}")
+        row["hunger_term = alpha_k x hunger"] = f"{meals.ALPHA_K[k]:.2f} x {hunger2:.3f} = {hunger_term:.3f}"
+        row["u (total)"] = round(u, 3)
+        rows.append(row)
     df_u = pd.DataFrame(rows)
     st.dataframe(df_u, width="stretch", hide_index=True)
 

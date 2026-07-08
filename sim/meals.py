@@ -1,4 +1,4 @@
-"""Meal table (K=6) and power profiles phi_k.
+"""Meal table (K=18, from master_table_Z.md) and power profiles phi_k.
 
 All numeric values come from sim.config -- this module only assembles them
 into arrays convenient for vectorised agent code, and provides the duration
@@ -13,12 +13,43 @@ from sim import config
 MEAL_NAMES = [m.name for m in config.MEALS]
 IDX_BY_NAME = {name: i for i, name in enumerate(MEAL_NAMES)}  # 0-based array index
 K = config.STATE.K
+assert K == len(config.MEALS), "config.STATE.K must match len(config.MEALS)"
 
-# z_k attribute matrix, columns = [taste, trad, effort, fuelcost], rows = meals (0-based)
-Z = np.array([[m.taste, m.trad, m.effort, m.fuelcost] for m in config.MEALS], dtype=float)
+# z_k attribute matrix, columns = ATTR_ORDER (see sim.population), rows = meals (0-based).
+# taste/tradition/kid/batch come straight from master_table_Z.md (already ~0-1). ing_cost,
+# prep_min and kcal are normalised by the *_MAX reference constants so they sit on a
+# comparable scale. fuelcost is reconstructed from charcoal_kes for fire-only meals only
+# (0 for electric meals -- they don't buy charcoal).
+_ing_cost_norm = np.array([m.ing_cost_kes for m in config.MEALS], dtype=float) / config.ING_COST_MAX_KES
+_prep_min_norm = np.array([m.prep_min for m in config.MEALS], dtype=float) / config.PREP_MIN_MAX
+_kcal_norm = np.array([m.kcal for m in config.MEALS], dtype=float) / config.KCAL_MAX
+_fuelcost_norm = np.array([
+    (m.charcoal_kes / config.CHARCOAL_KES_MAX) if m.fire_only else 0.0 for m in config.MEALS
+], dtype=float)
+
+Z = np.column_stack([
+    np.array([m.taste for m in config.MEALS], dtype=float),
+    np.array([m.tradition for m in config.MEALS], dtype=float),
+    np.array([m.kid for m in config.MEALS], dtype=float),
+    np.array([m.batch for m in config.MEALS], dtype=float),
+    _ing_cost_norm,
+    _prep_min_norm,
+    _kcal_norm,
+    _fuelcost_norm,
+])
+
 E_KWH = np.array([m.e_kwh for m in config.MEALS], dtype=float)
-ALPHA_K = np.array([m.alpha_k for m in config.MEALS], dtype=float)
-WOOD_MASK = np.array([(i + 1) in config.WOOD_MEAL_INDICES for i in range(K)], dtype=bool)
+ALPHA_K = config.ALPHA_SCALE * _kcal_norm
+WOOD_MASK = np.array([m.fire_only for m in config.MEALS], dtype=bool)
+
+# Reference (unnormalised) metadata, for display/explainability only -- not fed to gamma.z.
+KCAL = np.array([m.kcal for m in config.MEALS], dtype=float)
+PROTEIN_G = np.array([m.protein_g for m in config.MEALS], dtype=float)
+CARB_G = np.array([m.carb_g for m in config.MEALS], dtype=float)
+FAT_G = np.array([m.fat_g for m in config.MEALS], dtype=float)
+ING_COST_KES = np.array([m.ing_cost_kes for m in config.MEALS], dtype=float)
+CHARCOAL_KES = np.array([m.charcoal_kes for m in config.MEALS], dtype=float)
+MEAL_TYPE = [m.meal_type for m in config.MEALS]
 
 BLOCK_HOURS = config.STATE.block_minutes / 60.0
 DBAR_BLOCKS = np.array([m.dbar_min for m in config.MEALS], dtype=float) / config.STATE.block_minutes

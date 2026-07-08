@@ -135,8 +135,8 @@ def write_pm(transitions: dict, path: str, persona: str) -> None:
     lines.append("")
 
     lines.append('rewards "wood_meals"')
-    for k in range(meals.K):
-        if (k + 1) in config.WOOD_MEAL_INDICES:
+    for k, m in enumerate(config.MEALS):
+        if m.fire_only:
             lines.append(f"  (last_choice={k + 1}) : 1;")
     lines.append("endrewards")
     lines.append("")

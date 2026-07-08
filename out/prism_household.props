@@ -1,5 +1,0 @@
-// Expected number of wood meals eaten over the whole day
-R{"wood_meals"}=? [ C<=48 ]
-
-// Probability the agent has not completed all 3 meals by day end
-P=? [ F (t=48 & (hb=0 | hl=0 | hd=0)) ]

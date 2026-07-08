@@ -112,7 +112,7 @@ def plot_utility_waterfall(t_hr: float = 19.0, price_t: float | None = None, per
     hunger_val = 1.0  # representative moderate hunger for the demo slide
     hunger_term = meals.ALPHA_K * hunger_val                      # (K,)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(max(10, meals.K * 0.85), 7))
     x = np.arange(meals.K)
     bottom_pos = np.zeros(meals.K)
     bottom_neg = np.zeros(meals.K)
@@ -135,7 +135,7 @@ def plot_utility_waterfall(t_hr: float = 19.0, price_t: float | None = None, per
         ax.text(xi, tot + offset, f"{tot:.2f}", ha="center", va=va, fontweight="bold")
 
     ax.set_xticks(x)
-    ax.set_xticklabels(meals.MEAL_NAMES, rotation=20)
+    ax.set_xticklabels(meals.MEAL_NAMES, rotation=40, ha="right", fontsize=8)
     ax.set_ylabel("utility contribution")
     ax.set_title(f"Utility decomposition per meal -- t={t_hr:g}h, price={price_t:.2f}, persona={persona}")
     ax.axhline(0, color="black", linewidth=0.8)
