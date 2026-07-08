@@ -20,6 +20,7 @@ python -m sim audit            # just the [TBD] placeholder parameters
 python -m sim run              # simulate + score + plot (writes ./out/)
 python -m pytest tests/ -v     # unit tests
 streamlit run app.py           # interactive tuning dashboard, see below
+python generate_model_pdf.py   # writes out/model_reference.pdf -- equations + every parameter value
 ```
 
 ## Interactive dashboard (`app.py`)
