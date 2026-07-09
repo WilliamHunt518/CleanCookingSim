@@ -61,10 +61,12 @@ def persona_lam_vector(persona: str) -> np.ndarray:
 
 @dataclass
 class Population:
-    persona_idx: np.ndarray  # (N,) index into PERSONA_NAMES
-    gamma: np.ndarray        # (N, len(ATTR_ORDER)) individual taste-weight vectors
-    gamma_cost: np.ndarray   # (N,) individual price sensitivity
-    lam: np.ndarray          # (N, 3) persona-level per-stage hazard bias (not individually sampled)
+    persona_idx: np.ndarray       # (N,) index into PERSONA_NAMES
+    gamma: np.ndarray             # (N, len(ATTR_ORDER)) individual taste-weight vectors
+    gamma_cost: np.ndarray        # (N,) individual price sensitivity
+    lam: np.ndarray                # (N, 3) persona-level per-stage hazard bias (not individually sampled)
+    meals_per_cook: np.ndarray     # (N,) persona-level -- how many meals-equivalent one cook event is
+    bump_center_jitter: np.ndarray  # (N, 3) individual, fixed-for-the-sim offset to each stage's bump centre (hours)
 
     @property
     def n_agents(self) -> int:
@@ -112,4 +114,15 @@ def build_population(rng: np.random.Generator, n_agents: int | None = None,
 
     lam = base_lam[persona_idx]  # persona-level, not individually sampled
 
-    return Population(persona_idx=persona_idx, gamma=gamma, gamma_cost=gamma_cost, lam=lam)
+    meals_per_cook_by_persona = np.array(
+        [config.PERSONAS.meals_per_cook[p] for p in PERSONA_NAMES], dtype=float)
+    meals_per_cook = meals_per_cook_by_persona[persona_idx]
+
+    # A personal, fixed-for-the-simulation offset to each stage's bump centre -- some people
+    # habitually eat a bit earlier/later every day. Sampled once here (like gamma), not redrawn
+    # per block, so it's a stable trait, not day-to-day noise (see sim.agent.fire's sigma_logit_noise
+    # for that). See config.TIMING.sigma_bump_center_jitter's docstring for why this exists.
+    bump_center_jitter = rng.normal(0.0, config.TIMING.sigma_bump_center_jitter, size=(n_agents, 3))
+
+    return Population(persona_idx=persona_idx, gamma=gamma, gamma_cost=gamma_cost, lam=lam,
+                       meals_per_cook=meals_per_cook, bump_center_jitter=bump_center_jitter)

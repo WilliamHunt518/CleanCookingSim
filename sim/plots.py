@@ -35,18 +35,24 @@ def _save(fig: plt.Figure, out_dir: str, filename: str) -> str:
 
 
 def build_load_curves_figure(results: dict[str, TariffRunResult]) -> plt.Figure:
+    """Mean demand curve per tariff, with each tariff's mean peak (score.peak_kw) marked -- the
+    flattening these tariffs are meant to achieve should be visible directly as lower, blunter
+    peaks, not just readable off the load_factor bar chart."""
     fig, ax = plt.subplots(figsize=(10, 5))
     ax2 = ax.twinx()
 
     for name, result in results.items():
         mean_curve = np.mean(np.stack(result.demand_curves), axis=0)
-        ax.plot(T_HR, mean_curve, label=name)
+        line, = ax.plot(T_HR, mean_curve, label=name)
+        peak = score.peak_kw(result)
+        ax.axhline(peak, color=line.get_color(), alpha=0.25, linewidth=1, linestyle=":")
+        ax.text(T_HR[-1], peak, f" {peak:.0f} kW", color=line.get_color(), fontsize=8, va="center")
         ax2.plot(T_HR, result.price, alpha=0.25, linestyle="--")
 
     ax.set_xlabel("hour of day")
     ax.set_ylabel("aggregate demand (kW)")
     ax2.set_ylabel("price (currency/kWh, faint dashed)")
-    ax.set_title("Aggregate load curve by tariff (mean over runs)")
+    ax.set_title("Aggregate load curve by tariff (mean over runs) -- dotted lines mark mean peak_kw")
     ax.legend(loc="upper left")
     fig.tight_layout()
     return fig
@@ -56,23 +62,58 @@ def plot_load_curves(results: dict[str, TariffRunResult], out_dir: str = "out") 
     return _save(build_load_curves_figure(results), out_dir, "load_curves.png")
 
 
-def build_wood_share_figure(results: dict[str, TariffRunResult]) -> plt.Figure:
+def build_clean_cooking_figure(results: dict[str, TariffRunResult]) -> plt.Figure:
+    """Clean-cooking share (1 - wood_share) per tariff -- higher is better, the positive framing
+    of the same underlying fuel-mix number the old wood_share chart showed."""
     names = list(results.keys())
-    shares = [score.wood_share(results[n]) for n in names]
+    shares = [score.clean_cooking_share(results[n]) * 100 for n in names]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    bars = ax.bar(names, shares, color="tab:brown")
+    bars = ax.bar(names, shares, color="tab:green")
     for bar, share in zip(bars, shares):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{share:.2f}", ha="center", va="bottom")
-    ax.set_ylabel("wood share (fraction of all meals cooked)")
-    ax.set_title("Wood share by tariff")
+                f"{share:.0f}%", ha="center", va="bottom")
+    ax.set_ylabel("clean cooking share (% of all meals cooked electric)")
+    ax.set_ylim(0, 105)
+    ax.set_title("Clean cooking share by tariff -- higher is better")
     fig.tight_layout()
     return fig
 
 
-def plot_wood_share(results: dict[str, TariffRunResult], out_dir: str = "out") -> str:
-    return _save(build_wood_share_figure(results), out_dir, "wood_share.png")
+def plot_clean_cooking_share(results: dict[str, TariffRunResult], out_dir: str = "out") -> str:
+    return _save(build_clean_cooking_figure(results), out_dir, "clean_cooking_share.png")
+
+
+def build_peakiness_figure(results: dict[str, TariffRunResult]) -> plt.Figure:
+    """Peak draw (kW) and load factor (avg/peak, 1.0 = perfectly flat) per tariff -- these tariffs
+    are meant to flatten the village's demand curve, not just relocate fuel choice, so this is the
+    metric that actually tests that goal. Both bars use the same colour per tariff so it's easy to
+    read "smaller peak, taller load factor bar = flatter, better-utilised curve" at a glance."""
+    names = list(results.keys())
+    peaks = [score.peak_kw(results[n]) for n in names]
+    factors = [score.load_factor(results[n]) * 100 for n in names]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5))
+    bars1 = ax1.bar(names, peaks, color="tab:red")
+    for bar, v in zip(bars1, peaks):
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{v:.1f}", ha="center", va="bottom")
+    ax1.set_ylabel("mean peak demand (kW)")
+    ax1.set_title("Peak draw by tariff -- lower is flatter")
+
+    bars2 = ax2.bar(names, factors, color="tab:blue")
+    for bar, v in zip(bars2, factors):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{v:.0f}%", ha="center", va="bottom")
+    ax2.set_ylabel("load factor = mean/peak demand (%)")
+    ax2.set_ylim(0, 105)
+    ax2.set_title("Load factor by tariff -- higher is flatter")
+
+    fig.suptitle("How \"peaky\" each tariff's demand curve is")
+    fig.tight_layout()
+    return fig
+
+
+def plot_peakiness(results: dict[str, TariffRunResult], out_dir: str = "out") -> str:
+    return _save(build_peakiness_figure(results), out_dir, "peakiness.png")
 
 
 def build_meal_timing_figure(results: dict[str, TariffRunResult], population: Population) -> plt.Figure:
@@ -91,8 +132,11 @@ def build_meal_timing_figure(results: dict[str, TariffRunResult], population: Po
             ax = axes[row, col]
             starts_hr = [e.start_block * BLOCK_HOURS for e in all_events
                          if e.stage_idx == col and e.persona_idx == persona_idx]
-            lo, hi = config.TIMING.stage_windows_hr[stage]
-            ax.hist(starts_hr, bins=int((hi - lo) * 4), range=(lo, hi), color="tab:blue")
+            # Full 0-24h range, not stage_windows_hr -- there's no hard clock-window eligibility
+            # gate in sim.agent.fire any more (see stage_windows_hr's docstring), so a stage's
+            # events can legitimately land outside its old nominal window and shouldn't be clipped
+            # out of the histogram.
+            ax.hist(starts_hr, bins=96, range=(0.0, 24.0), color="tab:blue")
             n_events = len(starts_hr)
             ax.text(0.97, 0.92, f"n={n_events}", transform=ax.transAxes, ha="right", va="top", fontsize=7)
             if row == 0:
@@ -223,7 +267,8 @@ def plot_utility_waterfall(t_hr: float = 19.0, price_t: float | None = None, per
 def make_all_plots(results: dict[str, TariffRunResult], population: Population, out_dir: str = "out") -> list[str]:
     paths = [
         plot_load_curves(results, out_dir),
-        plot_wood_share(results, out_dir),
+        plot_clean_cooking_share(results, out_dir),
+        plot_peakiness(results, out_dir),
         plot_meal_timing(results, population, out_dir),
         plot_events_over_time(results, out_dir),
         plot_meal_type_over_time(results, out_dir),

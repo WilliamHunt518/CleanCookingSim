@@ -5,16 +5,20 @@ from sim import agent, config, meals
 from sim.population import ATTR_ORDER, Population, persona_gamma_vector
 
 
-def make_population(n=1, gamma=None, gamma_cost=1.2, lam=None):
+def make_population(n=1, gamma=None, gamma_cost=1.2, lam=None, meals_per_cook=1.0, bump_center_jitter=None):
     if gamma is None:
         gamma = np.tile(persona_gamma_vector("household"), (n, 1))
     if lam is None:
         lam = np.zeros((n, 3))
+    if bump_center_jitter is None:
+        bump_center_jitter = np.zeros((n, 3))
     return Population(
         persona_idx=np.zeros(n, dtype=int),
         gamma=np.asarray(gamma, dtype=float).reshape(n, len(ATTR_ORDER)),
         gamma_cost=np.full(n, gamma_cost, dtype=float),
         lam=lam,
+        meals_per_cook=np.full(n, meals_per_cook, dtype=float),
+        bump_center_jitter=np.asarray(bump_center_jitter, dtype=float).reshape(n, 3),
     )
 
 
@@ -60,27 +64,33 @@ def test_raising_price_shifts_choice_toward_wood_away_from_big_ecook():
 
 def test_raising_price_suppresses_firing_hazard():
     """Stage 1: a price-sensitive agent should be less likely to fire (start cooking at all)
-    when price is high, not just steered toward a different meal once it does fire."""
+    when price is high, not just steered toward a different meal once it does fire. Each call
+    gets its own freshly-seeded rng (same seed) so the two calls draw the identical
+    sigma_logit_noise realisation -- isolating the price effect from that per-block noise."""
     pop = make_population(n=1, gamma_cost=1.2)
     state = agent.init_state(1)
-    rng = np.random.default_rng(0)
     scenario = DummyScenario()
 
-    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0, rng=rng)
-    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0, rng=rng)
+    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0,
+                           rng=np.random.default_rng(0))
+    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0,
+                               rng=np.random.default_rng(0))
 
     assert fr_expensive.q[0] < fr_cheap.q[0]
 
 
 def test_no_cost_ablation_zeroes_firing_price_sensitivity_too():
-    """gamma_cost=0 (the --no-cost ablation) should make Stage 1 price-blind as well as Stage 2."""
+    """gamma_cost=0 (the --no-cost ablation) should make Stage 1 price-blind as well as Stage 2.
+    Each call gets its own freshly-seeded rng (same seed) so both draw the identical
+    sigma_logit_noise realisation -- isolating the price effect from that per-block noise."""
     pop = make_population(n=1, gamma_cost=0.0)
     state = agent.init_state(1)
-    rng = np.random.default_rng(0)
     scenario = DummyScenario()
 
-    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0, rng=rng)
-    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0, rng=rng)
+    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0,
+                           rng=np.random.default_rng(0))
+    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0,
+                               rng=np.random.default_rng(0))
 
     assert fr_expensive.q[0] == pytest.approx(fr_cheap.q[0])
 
@@ -100,7 +110,15 @@ def test_hunger_grows_when_meal_skipped_and_resets_on_eating():
     assert hunger_after_eating < hunger_hungry
 
 
-def test_stage_windows_respected_no_dinner_at_8am():
+def test_argmax_stage_and_slot_exclusivity(monkeypatch):
+    # This test is about which-stage selection and slot exclusivity, not the (separately tested)
+    # repeat_meal_prob mechanic -- zero it out so "already ate this stage" is deterministically
+    # ineligible here. There's no hard stage_windows_hr eligibility gate any more (see its
+    # docstring) -- fire() picks whichever not-yet-eaten stage's own bump is highest right now.
+    monkeypatch.setattr(config.TIMING, "repeat_meal_prob", 0.0)
+
+    # active_stage is just the illustrative nominal-window classifier (unaffected by this change);
+    # 8am/8pm are comfortably inside breakfast's/dinner's nominal windows and bump peaks alike.
     assert agent.STAGE_ORDER[agent.active_stage(8.0)] == "breakfast"
     assert agent.STAGE_ORDER[agent.active_stage(20.0)] == "dinner"
 
@@ -125,3 +143,47 @@ def test_stage_windows_respected_no_dinner_at_8am():
 
 def test_overnight_has_no_active_stage():
     assert agent.active_stage(2.0) == -1
+
+
+def test_repeat_meal_prob_occasionally_reopens_an_already_eaten_stage(monkeypatch):
+    """The odd bit of real-world messiness (a second helping / eating again) this parameter is
+    for: with the probability cranked to 1, an already-eaten stage must become eligible again."""
+    monkeypatch.setattr(config.TIMING, "repeat_meal_prob", 1.0)
+    pop = make_population(n=1)
+    state = agent.init_state(1)
+    state.h[0, 1] = meals.IDX_BY_NAME["ugali_ndengu_stew"] + 1  # already ate lunch
+    scenario = DummyScenario()
+
+    fr = agent.fire(state, t_hr=12.5, population=pop, scenario=scenario, price_t=0.25,
+                     rng=np.random.default_rng(0))
+    assert fr.eligible[0]
+
+
+def test_repeat_meal_prob_zero_keeps_eaten_stage_locked(monkeypatch):
+    monkeypatch.setattr(config.TIMING, "repeat_meal_prob", 0.0)
+    pop = make_population(n=1)
+    state = agent.init_state(1)
+    state.h[0, 1] = meals.IDX_BY_NAME["ugali_ndengu_stew"] + 1
+    scenario = DummyScenario()
+
+    fr = agent.fire(state, t_hr=12.5, population=pop, scenario=scenario, price_t=0.25,
+                     rng=np.random.default_rng(0))
+    assert not fr.eligible[0]
+
+
+def test_sigma_logit_noise_makes_hazard_vary_block_to_block(monkeypatch):
+    """Without noise, an agent's Stage 1 logit at a fixed hour/hunger/price is identical every
+    call. With sigma_logit_noise > 0, repeated calls (fresh rng each time, so only the noise draw
+    differs) should not all land on exactly the same q -- this is what breaks a large population's
+    razor-sharp, perfectly-synchronised peaks into something softer and noisier."""
+    monkeypatch.setattr(config.TIMING, "sigma_logit_noise", 2.0)
+    pop = make_population(n=1)
+    state = agent.init_state(1)
+    scenario = DummyScenario()
+
+    qs = [
+        agent.fire(state, t_hr=12.5, population=pop, scenario=scenario, price_t=0.25,
+                   rng=np.random.default_rng(seed)).q[0]
+        for seed in range(8)
+    ]
+    assert len(set(np.round(qs, 6))) > 1

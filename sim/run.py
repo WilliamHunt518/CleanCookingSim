@@ -44,10 +44,10 @@ def _trace_row(idx: int, t_block: int, t_hr: float, state: agent.AgentState,
         "block": t_block, "t_hr": round(t_hr, 4),
         "h_B": int(state.h[idx, 0]), "h_L": int(state.h[idx, 1]), "h_D": int(state.h[idx, 2]),
         "tau": float(state.tau[idx]), "hunger": float(fr.hunger[idx]),
-        "stage_idx": fr.stage_idx, "eligible": bool(fr.eligible[idx]),
-        "w": float(fr.w), "eta_t": float(fr.eta_t), "lam": float(fr.lam[idx]),
+        "stage_idx": int(fr.stage_idx[idx]), "eligible": bool(fr.eligible[idx]),
+        "w": float(fr.w[idx]), "eta_t": float(fr.eta_t), "lam": float(fr.lam[idx]),
         "alpha0_hunger": float(fr.alpha0_hunger[idx]), "price_term": float(fr.price_term[idx]),
-        "q": float(fr.q[idx]), "fired": bool(fr.fired[idx]),
+        "noise": float(fr.noise[idx]), "q": float(fr.q[idx]), "fired": bool(fr.fired[idx]),
     }
     if fr.fired[idx]:
         choice = int(wh.choice[idx])
@@ -86,15 +86,19 @@ def simulate_day(population: population_mod.Population, price: np.ndarray, scena
                 meal0 = int(wh.choice[a_idx])
                 dur = int(durations[k])
                 dur_by_agent[int(a_idx)] = dur
-                profile = meals.power_profile(meal0, dur)
+                # A school/kiosk agent's one firing decision represents an institutional kitchen
+                # serving many people at once, not one household -- scale both the power profile
+                # and the kWh accounting by that persona's meals_per_cook (1 for household).
+                scale = float(population.meals_per_cook[a_idx])
+                profile = meals.power_profile(meal0, dur) * scale
                 end = min(T, t_block + dur)
                 demand[t_block:end] += profile[: end - t_block]
                 if agent_power is not None:
                     agent_power[a_idx, t_block:end] += profile[: end - t_block]
                 events.append(CookEvent(
                     agent_idx=int(a_idx), persona_idx=int(population.persona_idx[a_idx]),
-                    stage_idx=fr.stage_idx, meal_idx0=meal0, start_block=t_block,
-                    duration_blocks=dur, e_kwh=float(meals.E_KWH[meal0]),
+                    stage_idx=int(fr.stage_idx[a_idx]), meal_idx0=meal0, start_block=t_block,
+                    duration_blocks=dur, e_kwh=float(meals.E_KWH[meal0]) * scale,
                 ))
 
         if trace_agent is not None:
@@ -123,7 +127,7 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
               ) -> tuple[dict[str, TariffRunResult], population_mod.Population]:
     """progress_callback, if given, is called after every simulated day with a dict:
     tariff_idx/n_tariffs/tariff_name, run_idx/R, and running totals (events_so_far,
-    wood_events_so_far, wood_share_so_far) -- everything a UI needs to show live progress
+    wood_events_so_far, clean_share_so_far) -- everything a UI needs to show live progress
     without recomputing anything from the (potentially large) event list itself."""
     seed = config.DEFAULT_SEED if seed is None else seed
     R = config.SCORING.R if R is None else R
@@ -164,7 +168,7 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
                     "tariff_idx": ti, "n_tariffs": n_tariffs, "tariff_name": tname,
                     "run_idx": r, "R": R,
                     "events_so_far": running_events, "wood_events_so_far": running_wood,
-                    "wood_share_so_far": (running_wood / running_events) if running_events else 0.0,
+                    "clean_share_so_far": (1.0 - running_wood / running_events) if running_events else 0.0,
                 })
         results[tname] = TariffRunResult(tariff_name=tname, price=price, events_all_runs=all_events,
                                           demand_curves=demand_curves,

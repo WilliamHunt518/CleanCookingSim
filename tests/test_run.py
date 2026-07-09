@@ -42,6 +42,35 @@ def test_different_seeds_give_different_results():
     assert not np.array_equal(d1, d2)
 
 
+def test_school_and_kiosk_events_scale_by_meals_per_cook():
+    """A school/kiosk agent's one cook event represents an institutional kitchen serving many
+    people at once (config.PERSONAS.meals_per_cook), not one household -- its e_kwh (and
+    therefore its demand-curve contribution) should be scaled up accordingly, not identical to a
+    household's for the same meal."""
+    from sim.population import PERSONA_NAMES
+
+    rng_pop = np.random.default_rng(1)
+    population = build_population(rng_pop, n_agents=100)
+    price = np.full(config.STATE.T, config.TARIFF.p_bar)
+    scenario = config.SCENARIOS["reference"]
+    day = run.simulate_day(population, price, scenario, np.random.default_rng(2))
+
+    assert len(day.events) > 0
+    for e in day.events:
+        persona_name = PERSONA_NAMES[e.persona_idx]
+        expected_scale = config.PERSONAS.meals_per_cook[persona_name]
+        base_e_kwh = meals.E_KWH[e.meal_idx0]
+        if base_e_kwh > 0:
+            assert np.isclose(e.e_kwh, base_e_kwh * expected_scale)
+
+    school_events = [e for e in day.events if PERSONA_NAMES[e.persona_idx] == "school"]
+    household_events = [e for e in day.events if PERSONA_NAMES[e.persona_idx] == "household"]
+    if school_events and household_events and config.PERSONAS.meals_per_cook["school"] > 1:
+        # Same underlying per-meal e_kwh table, but school events should individually draw more
+        # energy on average, since each one stands in for many meals at once.
+        assert config.PERSONAS.meals_per_cook["school"] > config.PERSONAS.meals_per_cook["household"]
+
+
 def test_extreme_test_tariff_saturates_toward_almost_no_cooking():
     """Sanity check that price response saturates at an extreme input (sim/tariffs.py's
     extreme_test candidate, 5x p_bar) rather than silently no-op'ing: Stage 1 doesn't know which

@@ -7,6 +7,13 @@ noise (uses the persona-mean gamma/gamma_cost/lam), a flat reference tariff
 model is portable to a formal-verification tool; it is not a re-derivation
 of the full 5-minute Monte Carlo simulator's exact transition probabilities.
 
+Also omitted, for the same "exact DTMC" reason: sim.agent.fire's per-block
+sigma_logit_noise (a DTMC needs a fixed transition probability per state, not
+one redrawn per realisation -- marginalising a sigmoid over Gaussian noise
+has no closed form) and repeat_meal_prob (tractable in principle, just not
+implemented here -- would need the reward/eligibility bookkeeping reworked
+to allow a stage to fire more than once).
+
 Because PRISM's modelling language has no exp()/sigmoid/softmax, every
 transition probability is computed exactly in Python (reusing sim.agent's
 hazard/utility formulas) and emitted as an explicit numeric DTMC.
@@ -36,11 +43,20 @@ def _hunger(h: list[int], tau_hr: float, t_hr: float) -> float:
 
 def _fire_prob(h: list[int], tau_hr: float, t_hr: float, lam_vec: np.ndarray,
                 gamma_cost: float) -> tuple[int, float, float]:
-    stage_idx = agent.active_stage(t_hr)
     hunger = _hunger(h, tau_hr, t_hr)
-    if stage_idx == -1 or h[stage_idx] != 0:
+    # Which stage is "now" -- whichever stage's own bump is highest at this instant, regardless of
+    # eaten status, mirroring sim.agent.fire's argmax mechanism (no hard stage_windows_hr clock
+    # gate). Only *then* check whether that stage is already eaten -- an agent who just finished
+    # lunch doesn't immediately start "thinking about dinner" just because it's their only
+    # remaining meal; they wait until dinner's bump has actually overtaken lunch's.
+    bump = agent.stage_bump(t_hr)
+    stage_idx = int(np.argmax(bump))
+    if h[stage_idx] != 0:
+        # Already ate today's most-relevant stage. The real simulator has a tiny repeat_meal_prob
+        # chance of firing anyway; this export doesn't implement that (see module docstring), so
+        # it's a hard 0 here instead.
         return stage_idx, 0.0, hunger
-    w = agent.w_of_t(t_hr)
+    w = bump[stage_idx]
     # PRICE_FLAT == p_bar (this export always uses the flat reference tariff), so this term is
     # identically 0 here -- see sim.agent.fire's docstring comment for why it's centered on p_bar
     # and clipped to never reward a below-average price, only penalise an above-average one.
@@ -132,10 +148,15 @@ def write_pm(transitions: dict, path: str, persona: str) -> None:
         lines.append(f"  [] {guard} -> " + " + ".join(parts) + ";")
     lines += ["endmodule", ""]
 
+    # A school/kiosk "cook" is an institutional kitchen serving many people at once, not one
+    # household (see config.PERSONAS.meals_per_cook) -- scale the energy reward the same way
+    # sim.run.simulate_day scales the real demand curve, so this persona's expected daily energy
+    # is comparable to what the Monte Carlo simulator would show for the same persona.
+    meals_per_cook = config.PERSONAS.meals_per_cook.get(persona, 1)
     lines.append('rewards "energy_kwh"')
     for k, m in enumerate(config.MEALS):
         if m.e_kwh > 0:
-            lines.append(f"  (last_choice={k + 1}) : {m.e_kwh};")
+            lines.append(f"  (last_choice={k + 1}) : {m.e_kwh * meals_per_cook:g};")
     lines.append("endrewards")
     lines.append("")
 

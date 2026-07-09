@@ -93,8 +93,11 @@ class TimingConfig:
     bump_centers_hr: dict
     bump_heights: dict
     bump_width_hr: float
+    sigma_bump_center_jitter: float
     DELTA: float
     kappa_price_time: float
+    sigma_logit_noise: float
+    repeat_meal_prob: float
     stage_windows_hr: dict
 
 
@@ -118,6 +121,34 @@ TIMING = TimingConfig(
                      "Gaussian width (std dev) of each meal-time hazard bump.",
                      "Wider = firing probability spread over a longer window around the peak.",
                      tbd=True),
+    sigma_bump_center_jitter=p("timing", "sigma_bump_center_jitter", 1.8, "hours (std dev)",
+                                "Every agent gets its own small, fixed-for-the-simulation personal "
+                                "offset to each stage's bump centre (jitter ~ Normal(0, "
+                                "sigma_bump_center_jitter), sampled once per agent at population-build "
+                                "time, same idea as gamma's individual sampling). Without this, every "
+                                "agent shares the exact same w(t) curve, so a large population "
+                                "synchronises into an almost perfectly aligned, razor-sharp aggregate "
+                                "peak at exactly bump_centers_hr with near-silence either side -- too "
+                                "clean to be believable (real households don't all decide to eat lunch "
+                                "at exactly 12:30). This is a *personal* trait (some people habitually "
+                                "eat a bit earlier/later every day), distinct from sigma_logit_noise's "
+                                "block-to-block idiosyncrasy (today's whim) -- both contribute to a "
+                                "softer, wider, more realistic aggregate curve, but this one is what "
+                                "actually widens the peak shape; noise mostly perturbs its edges. "
+                                "Empirically tuned alongside sigma_logit_noise: 1.8h widens the std dev "
+                                "of lunch cook-start times from ~0.9h to ~1.1-1.3h and cuts the "
+                                "aggregate cook-events-over-time chart's tallest half-hour bin by "
+                                "~15-20%, while keeping meals/day within ~5% of the jitter=0 baseline "
+                                "(too much jitter shifts an agent's effective bump centre so far it "
+                                "starts losing the argmax contest to a neighbouring stage before it ever "
+                                "fires -- see sim.agent.stage_bump_per_agent -- which costs them that "
+                                "meal rather than just moving it).",
+                                "Higher = the aggregate peak visibly widens and flattens as agents' "
+                                "personal mealtimes spread out; 0 = the old perfectly-synchronised "
+                                "population-wide w(t). Push too far and some agents miss meals entirely "
+                                "(their bump loses out to a neighbouring stage) rather than just eating "
+                                "them at an unusual time.",
+                                tbd=True),
     DELTA=p("timing", "DELTA", 0.15, "probability/block (max)",
             "Scale factor converting the hazard logit's sigmoid into a per-block firing "
             "probability; also the hard cap on that probability (sigmoid in [0,1]). "
@@ -155,13 +186,54 @@ TIMING = TimingConfig(
                         "Higher = tariffs visibly reshape *when* the population cooks, not just what they "
                         "cook; too high and expensive-hour agents mostly stop firing rather than shifting.",
                         tbd=True),
+    sigma_logit_noise=p("timing", "sigma_logit_noise", 1.3, "logit (std dev)",
+                         "Per-agent, per-block idiosyncratic noise added to the Stage 1 firing-hazard "
+                         "logit: noise ~ Normal(0, sigma_logit_noise), redrawn fresh every block for "
+                         "every agent. Without it, every agent's hazard at a given hour is identical "
+                         "up to lam/hunger/price -- large populations synchronise into an almost "
+                         "perfectly clean, razor-sharp peak at each bump centre with dead silence "
+                         "between them, which reads as too idealised (real households don't all decide "
+                         "to eat at exactly the same moment). This is genuine day-to-day/agent-to-agent "
+                         "idiosyncrasy (mood, distraction, a visitor turning up), not a persona trait or "
+                         "measurement error, so it's redrawn every block rather than sampled once. "
+                         "Empirically tuned alongside sigma_bump_center_jitter, which does more of the "
+                         "actual peak-widening work -- this mostly perturbs which exact block within an "
+                         "already-open window an agent fires on, rather than shifting when their whole "
+                         "personal hazard curve is centred.",
+                         "Higher = softer, noisier peaks; 0 = the old perfectly synchronised behaviour. "
+                         "Can't by itself reopen an already-eaten stage -- for that, see "
+                         "repeat_meal_prob.",
+                         tbd=True),
+    repeat_meal_prob=p("timing", "repeat_meal_prob", 0.0006, "probability/block",
+                        "Small per-block chance that an agent fires *again* in a stage it has already "
+                        "eaten this stage today (a second helping / snack / someone popping back for "
+                        "more) -- eligibility is normally locked to exactly one meal per stage per day "
+                        "(see sim.agent.fire's already_eaten check), which is clean but means the model "
+                        "can never produce the odd bit of real-world messiness ('ate again', 'ate really "
+                        "soon after the last one'). Independent of hunger -- this is opportunistic/social "
+                        "eating, not need-driven, so it doesn't reduce hunger accounting (h's nonzero "
+                        "count, and therefore n_eaten, is unaffected by a repeat overwriting h[stage]). "
+                        "At ~70 blocks over which a stage's bump is typically the argmax winner, "
+                        "0.0006/block is roughly a 4% chance of a repeat somewhere in that stretch per "
+                        "agent per stage.",
+                        "Higher = more visible 'double meal' outliers in the event log and a less "
+                        "perfectly regular 1-meal-per-stage pattern; 0 = the old hard-gated behaviour.",
+                        tbd=True),
     stage_windows_hr=p("timing", "stage_windows_hr",
                         {"breakfast": (5.0, 11.0), "lunch": (11.0, 16.0), "dinner": (16.0, 23.0)},
                         "hour (24h clock)",
-                        "Clock-time window during which each stage's slot may fire at all; "
-                        "a stage cannot fire outside its window, and cannot fire again once its "
-                        "slot in h is nonzero.",
-                        "Narrower windows force meals into a tighter part of the day.",
+                        "Nominal clock-time window for each stage, used only by "
+                        "sim.agent.active_stage's simple classifier (Explainability copy, plotting "
+                        "axis ranges) -- *not* an eligibility gate in sim.agent.fire. Which stage an "
+                        "agent actually considers each block is instead whichever not-yet-eaten stage's "
+                        "own smooth hazard bump (see bump_centers_hr/bump_heights/bump_width_hr) is "
+                        "highest at that instant (sim.agent.stage_bump_per_agent's argmax) -- these "
+                        "windows were removed as a hard on/off gate on top of that because the gate "
+                        "produced a population-wide cliff in cook-start times right at each window "
+                        "boundary, regardless of how gently the underlying bump itself decayed.",
+                        "Only affects the classifier's nominal reference points, not real "
+                        "eligibility -- to actually narrow when meals fire, use bump_width_hr or "
+                        "bump_centers_hr instead.",
                         tbd=True),
 )
 
@@ -179,9 +251,12 @@ class HungerConfig:
 HUNGER = HungerConfig(
     nbar_step_times_hr=p("hunger", "nbar_step_times_hr",
                           {"0": 0.0, "1": 9.0, "2": 14.0, "3": 21.0}, "hour (24h clock)",
-                          "Step curve nbar(t): expected cumulative meals eaten by this time of day "
-                          "(0 meals before 09:00, 1 after 09:00, 2 after 14:00, 3 after 21:00).",
-                          "Moving a step earlier makes agents 'behind schedule' (and hence hungrier) sooner.",
+                          "Anchor points nbar(t) (see config.nbar) linearly interpolates between: "
+                          "expected cumulative meals eaten by this time of day is 0 at t=0, ramps "
+                          "to 1 by 09:00, to 2 by 14:00, to 3 by 21:00 -- a gradual ramp between "
+                          "anchors, not an instantaneous jump the moment the clock passes each one.",
+                          "Moving an anchor earlier makes agents 'behind schedule' (and hence "
+                          "hungrier) sooner, ramping in gradually rather than all at once.",
                           tbd=True),
     kappa=p("hunger", "kappa", 0.05, "hunger-units/hour",
             "Weight converting hours-since-last-meal (tau) into hunger.",
@@ -194,16 +269,18 @@ HUNGER = HungerConfig(
 )
 
 
-def nbar(t_hr: float) -> int:
-    """Step curve: expected cumulative meals eaten by clock time t_hr."""
+def nbar(t_hr: float) -> float:
+    """Expected cumulative meals eaten by clock time t_hr -- linearly interpolated between the
+    same nbar_step_times_hr anchors used before (0 meals at t=0, 1 by t=9, 2 by t=14, 3 by t=21),
+    rather than jumping instantaneously the moment the clock ticks past each anchor. A hard step
+    meant the whole population became uniformly "behind schedule" (and hence hungrier) at exactly
+    the same instant; ramping gradually between anchors is one of the two changes (together with
+    removing the stage_windows_hr hard eligibility gate in sim.agent.fire) that stops the model
+    firing everyone's lunch in an all-at-once cliff right at a fixed clock boundary."""
     steps = HUNGER.nbar_step_times_hr
-    if t_hr >= steps["3"]:
-        return 3
-    if t_hr >= steps["2"]:
-        return 2
-    if t_hr >= steps["1"]:
-        return 1
-    return 0
+    times = [steps["0"], steps["1"], steps["2"], steps["3"]]
+    values = [0.0, 1.0, 2.0, 3.0]
+    return float(np.interp(t_hr, times, values))
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +456,7 @@ class PersonaConfig:
     persona_gamma_offsets: dict  # {persona_name: {feature: additive delta}}
     persona_lam: dict            # {persona_name: {stage: replacement value}}
     mix: dict
+    meals_per_cook: dict          # {persona_name: how many meals-equivalent one cook event represents}
 
 
 PERSONAS = PersonaConfig(
@@ -456,6 +534,29 @@ PERSONAS = PersonaConfig(
           "More schools shifts the aggregate load curve toward a midday peak; more kiosks shift it "
           "toward whatever timing kiosk ends up with (currently household-like, see persona_lam).",
           tbd=True),
+    meals_per_cook=p("personas", "meals_per_cook", {"household": 1, "school": 5, "kiosk": 3},
+                      "meals per cook event",
+                      "Each *agent* in the population is one firing decision, but a school or kiosk "
+                      "agent represents an institutional kitchen, not one household -- one school "
+                      "'cooking lunch' is really a canteen serving many students at once, and one "
+                      "kiosk 'cooking' serves several customers per session. This multiplies both the "
+                      "energy (e_kwh) and power draw recorded for that single event, so peak_kw and "
+                      "load_factor reflect that a school's one decision has a bigger-than-household "
+                      "energy footprint. It does NOT change clean_cooking_share, which counts events, "
+                      "not energy -- a school's one electric lunch still counts as one clean event, the "
+                      "same as a household's. household is fixed at 1 (a household cooks for itself). "
+                      "school/kiosk values are placeholder guesses -- master_table_Z.md gives no "
+                      "enrollment or vendor-footfall figures. Empirically tuned: a literal per-student "
+                      "headcount (e.g. 50-80) pushed peak_kw to 350-450 (vs. ~42 unscaled), an "
+                      "8-10x blowout that swamped the whole village's demand curve into one giant "
+                      "school-shaped spike rather than a *contributor* to it -- real institutional "
+                      "kitchens likely also cook somewhat more efficiently per meal at scale, not "
+                      "linearly with headcount. 5/3 roughly doubles peak_kw over the unscaled baseline, "
+                      "visible without dominating.",
+                      "Higher = that persona's cook events dominate the aggregate demand curve more; "
+                      "1 = no scaling (the old behaviour, where a school agent looked exactly like an "
+                      "extra household).",
+                      tbd=True),
 )
 
 N_AGENTS = p("personas", "N_AGENTS", 100, "agents",

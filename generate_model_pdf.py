@@ -275,8 +275,12 @@ def model_pages(pdf: PdfPages) -> None:
          f"$(c_L,\\beta_L)=({bc['lunch']:g}\\mathrm{{h}}, {bh['lunch']:g})$, "
          f"$(c_D,\\beta_D)=({bc['dinner']:g}\\mathrm{{h}}, {bh['dinner']:g})$; "
          f"$\\alpha_0={config.HUNGER.alpha0:g}$, $\\kappa={config.HUNGER.kappa:g}$, "
-         f"$\\Delta={config.TIMING.DELTA:g}$. Stage $s$ may only fire inside its own clock-time window "
-         f"(breakfast {sw['breakfast']}, lunch {sw['lunch']}, dinner {sw['dinner']}, all in 24h clock hours)."),
+         f"$\\Delta={config.TIMING.DELTA:g}$. There is no hard clock-time window per stage: at every "
+         f"block, stage $s^*=\\arg\\max_s w_s(t)$ (whichever stage's own bump is currently highest) is "
+         f"the one this agent's decision is about, and it can only fire if that stage hasn't been eaten "
+         f"yet today. Nominal reference windows for stage $s$ -- roughly where $s$ tends to win that "
+         f"contest -- are breakfast {sw['breakfast']}, lunch {sw['lunch']}, dinner {sw['dinner']} (24h "
+         f"clock hours)."),
         ("space", 0.01),
 
         ("heading", "3. Stage 2 -- meal choice"),

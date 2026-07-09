@@ -46,11 +46,15 @@ def _snapshot(scenario_name, tariff_names, R, seed, no_cost, no_hunger, no_perso
     """Everything that affects a run's outcome, for staleness comparison."""
     return {
         "n_agents": config.N_AGENTS, "mix": dict(config.PERSONAS.mix),
+        "meals_per_cook": dict(config.PERSONAS.meals_per_cook),
         "gamma": dict(config.PERSONAS.base_gamma), "gamma_cost": config.PERSONAS.base_gamma_cost,
         "sigma_ind": config.PERSONAS.sigma_ind,
         "persona_gamma_offsets": {p: dict(off) for p, off in config.PERSONAS.persona_gamma_offsets.items()},
         "persona_lam": {p: dict(lam) for p, lam in config.PERSONAS.persona_lam.items()},
         "DELTA": config.TIMING.DELTA, "kappa_price_time": config.TIMING.kappa_price_time,
+        "sigma_bump_center_jitter": config.TIMING.sigma_bump_center_jitter,
+        "sigma_logit_noise": config.TIMING.sigma_logit_noise,
+        "repeat_meal_prob": config.TIMING.repeat_meal_prob,
         "tariff": (config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi),
         "scenario": scenario_name, "tariffs": tuple(tariff_names), "R": R, "seed": seed,
         "no_cost": no_cost, "no_hunger": no_hunger, "no_personas": no_personas,
@@ -166,7 +170,7 @@ _PLAYBACK_HTML_TEMPLATE = r"""
       <div class="stats">
         <div class="stat"><b id="stTotal">0.00 kW</b><small>total draw</small></div>
         <div class="stat"><b id="stCooking">0</b><small>cooking now</small></div>
-        <div class="stat"><b id="stWood">0%</b><small>wood share (today)</small></div>
+        <div class="stat"><b id="stClean">0%</b><small>clean cooking (today)</small></div>
       </div>
     </div>
   </div>
@@ -244,7 +248,7 @@ function render(frame) {
   document.getElementById('stCooking').textContent = active.length;
   let woodSoFar = 0, totalSoFar = 0;
   for (let i = 0; i <= frame; i++) { for (const a of DATA.activity_starts[i] || []) { totalSoFar++; if (a) woodSoFar++; } }
-  document.getElementById('stWood').textContent = totalSoFar ? Math.round(100*woodSoFar/totalSoFar)+'%' : '0%';
+  document.getElementById('stClean').textContent = totalSoFar ? Math.round(100*(1-woodSoFar/totalSoFar))+'%' : '0%';
   document.getElementById('scrub').value = frame;
 }
 
@@ -380,7 +384,7 @@ with st.container(key="live_panel"):
                 m1.metric("Tariff", f"{info['tariff_name']} ({info['tariff_idx'] + 1}/{info['n_tariffs']})")
                 m2.metric("Monte Carlo run", f"{info['run_idx'] + 1}/{info['R']}")
                 m3.metric("Meals simulated so far", f"{info['events_so_far']:,}")
-                m4.metric("Running wood share", f"{info['wood_share_so_far'] * 100:.1f}%")
+                m4.metric("Running clean cooking %", f"{info['clean_share_so_far'] * 100:.1f}%")
 
         with st.spinner("Simulating..."):
             results, population = run_mod.run_sweep(
@@ -410,7 +414,11 @@ with st.container(key="live_panel"):
     results = st.session_state["results"]
 
     st.markdown("#### Scoreboard")
-    st.caption("Sorted by wood_share ascending -- lower means fewer meals cooked on fire.")
+    st.caption("Sorted by clean_cooking_share descending -- higher means more meals cooked "
+               "electric, not over fire. peak_kw and load_factor (mean/peak demand, 1.0 = "
+               "perfectly flat) score how well a tariff flattens the village's demand curve, "
+               "which is a separate goal from clean cooking -- a tariff can win on one and lose "
+               "on the other.")
     st.dataframe(board, width="stretch", hide_index=True)
 
     st.markdown("#### House map -- day playback")
@@ -465,16 +473,24 @@ with st.container(key="live_panel"):
         st.pyplot(fig)
         plt.close(fig)
 
-    st.markdown("###### Load, wood share &amp; timing", unsafe_allow_html=True)
+    st.markdown("###### Load &amp; clean cooking", unsafe_allow_html=True)
     cols = st.columns(2)
     with cols[0]:
         fig = plots.build_load_curves_figure(results)
         st.pyplot(fig)
         plt.close(fig)
     with cols[1]:
-        fig = plots.build_wood_share_figure(results)
+        fig = plots.build_clean_cooking_figure(results)
         st.pyplot(fig)
         plt.close(fig)
+
+    st.markdown("###### How peaky is each tariff's demand curve?", unsafe_allow_html=True)
+    st.caption("These tariffs are meant to flatten the village's demand curve, not just relocate "
+               "fuel choice -- this is the metric that actually tests that goal, separate from "
+               "clean cooking share above.")
+    fig = plots.build_peakiness_figure(results)
+    st.pyplot(fig)
+    plt.close(fig)
 
     fig = plots.build_meal_timing_figure(results, population)
     st.pyplot(fig)
@@ -580,8 +596,9 @@ st.markdown(
     + theme.con_card("i-peak", "Evening price signal",
                       f"evening_peak window <code>{peak_lo:g}-{peak_hi:g}h @ {config.TARIFF.p_hi:g}</code> "
                       f"vs off-peak <code>{config.TARIFF.p_lo:g}</code> -- cuts dinners still starting "
-                      "inside that window from ~85% to ~0% at the current kappa_price_time; scoreboard "
-                      "wood_share now spans ~0.22 to ~0.42 across the three real tariffs.")
+                      "inside that window from ~85% to ~0%; scoreboard clean_cooking_share now spans "
+                      "~58% (flat) to ~78% (evening_peak) -- though evening_peak's redistributed load "
+                      "also gives it the *tallest* peak_kw of the three, a genuine clean-vs-flat tradeoff.")
     + theme.con_card("i-stew", "Real market prices",
                       f"Costs normalised to local maxima: ingredients <code>{config.ING_COST_MAX_KES:g} "
                       f"KES</code>, prep <code>{config.PREP_MIN_MAX:g} min</code>, charcoal "
@@ -590,7 +607,11 @@ st.markdown(
                       f"Kiosk: taste <code>+{kiosk_off.get('taste', 0):g}</code>, prep "
                       f"<code>{kiosk_off.get('prep_min', 0):g}</code>, hours unknown &rarr; inherits "
                       f"household timing. School: lunch-only <code>&lambda;={school_lam.get('lunch', 0):+g}</code>, "
-                      f"ing_cost <code>{school_off.get('ing_cost', 0):g}</code>.")
+                      f"ing_cost <code>{school_off.get('ing_cost', 0):g}</code>. Both are one *agent* but "
+                      f"an institutional kitchen -- <code>meals_per_cook</code> scales school "
+                      f"<code>&times;{config.PERSONAS.meals_per_cook['school']:g}</code> and kiosk "
+                      f"<code>&times;{config.PERSONAS.meals_per_cook['kiosk']:g}</code> so one firing "
+                      "decision draws energy like the canteen/vendor it represents, not one household.")
     + theme.con_card("i-choma", "Festivals",
                       f"Scenario offsets: choma <code>+{choma_fire_bonus:g}</code> appeal, dinner bump "
                       f"<code>+{dinner_shift:g} h</code> later -- a template for market days &amp; droughts.")
@@ -640,8 +661,9 @@ st.markdown(
     + theme.scale_step(3, "Signal, don't lecture",
                         "Green LED + 25% discount &rarr; 57% daylight cooking, rising monthly.")
     + theme.scale_step(4, "Rehearse, then price",
-                        "Re-run the simulator per site: new menu, personas, PV curve -- same score: "
-                        "wood share (lower is better).")
+                        "Re-run the simulator per site: new menu, personas, PV curve -- same two "
+                        "scores: clean cooking share (higher is better) and load factor (flatter "
+                        "demand curve, higher is better).")
     + '</div>', unsafe_allow_html=True)
 
 st.markdown(theme.beads(), unsafe_allow_html=True)
@@ -668,6 +690,18 @@ with st.form("params_form"):
         pct_kiosk_in = st.slider("Kiosk share (%)", 0, 40,
                                   int(round(100 * mix_now["kiosk"] / mix_total)), step=1)
     st.caption("Household gets whatever's left of the 100% after school + kiosk.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        school_meals_per_cook_in = st.slider(
+            "School meals per cook event", 1, 100, config.PERSONAS.meals_per_cook["school"],
+            help="A school agent's one firing decision is a canteen serving many students at "
+                 "once, not one household -- this multiplies both its energy (e_kwh) and power "
+                 "draw. Doesn't affect clean_cooking_share (which counts events, not energy).")
+    with c2:
+        kiosk_meals_per_cook_in = st.slider(
+            "Kiosk meals per cook event", 1, 100, config.PERSONAS.meals_per_cook["kiosk"],
+            help="Same idea for a kiosk/vendor serving several customers per cooking session.")
 
     st.markdown("#### Household persona -- gamma (Stage 2: which meal), the base every "
                 "persona's offsets sit on top of")
@@ -773,6 +807,31 @@ with st.form("params_form"):
                  "0 = tariffs only ever change meal choice at a fixed time (the old behaviour); "
                  "higher = a pricey hour visibly thins and delays cooking, not just its fuel.")
 
+    st.markdown("###### Realism noise -- breaking up an otherwise too-clean, too-synchronised day")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sigma_bump_jitter_in = st.slider(
+            "sigma_bump_center_jitter (personal mealtime offset)", 0.0, 4.0,
+            config.TIMING.sigma_bump_center_jitter, 0.1,
+            help="Each agent gets its own small, fixed offset to each stage's bump centre -- "
+                 "some people habitually eat a bit earlier/later every day. 0 = every agent "
+                 "shares the exact same w(t), which synchronises a large population into an "
+                 "almost perfectly aligned, razor-sharp aggregate peak. This is what actually "
+                 "widens the peak shape.")
+    with c2:
+        sigma_logit_noise_in = st.slider(
+            "sigma_logit_noise (day-to-day whim)", 0.0, 4.0, config.TIMING.sigma_logit_noise, 0.1,
+            help="Per-block idiosyncratic noise on top of the jitter above -- today's mood, a "
+                 "visitor turning up. Redrawn fresh every block, so it perturbs which exact "
+                 "block within an already-open window an agent fires on.")
+    with c3:
+        repeat_meal_prob_in = st.slider(
+            "repeat_meal_prob (second helping / eating again)", 0.0, 0.01,
+            config.TIMING.repeat_meal_prob, 0.0001, format="%.4f",
+            help="Tiny per-block chance an agent fires again in a stage it already ate today -- "
+                 "the odd bit of real-world messiness a hard one-meal-per-stage rule can't "
+                 "otherwise produce. Not hunger-driven, doesn't affect hunger accounting.")
+
     st.markdown("#### Tariff")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -793,6 +852,8 @@ if save_clicked or save_run_clicked:
     n_household = max(0, n_agents_in - n_school - n_kiosk)
     config.N_AGENTS = n_agents_in
     config.PERSONAS.mix = {"household": n_household, "school": n_school, "kiosk": n_kiosk}
+    config.PERSONAS.meals_per_cook = {"household": 1, "school": school_meals_per_cook_in,
+                                       "kiosk": kiosk_meals_per_cook_in}
     config.PERSONAS.base_gamma = {"taste": taste_in, "tradition": tradition_in, "kid": kid_in,
                                    "batch": batch_in, "ing_cost": ing_cost_in, "prep_min": prep_min_in,
                                    "kcal": kcal_in, "fuelcost": fuelcost_in}
@@ -810,6 +871,9 @@ if save_clicked or save_run_clicked:
     }
     config.TIMING.DELTA = delta_in
     config.TIMING.kappa_price_time = kappa_price_time_in
+    config.TIMING.sigma_bump_center_jitter = sigma_bump_jitter_in
+    config.TIMING.sigma_logit_noise = sigma_logit_noise_in
+    config.TIMING.repeat_meal_prob = repeat_meal_prob_in
     config.TARIFF.p_bar, config.TARIFF.p_lo, config.TARIFF.p_hi = p_bar_in, p_lo_in, p_hi_in
     st.success("Parameters saved.")
     if save_run_clicked:
@@ -835,13 +899,25 @@ st.markdown("**State.** $h=(h_B,h_L,h_D)\\in\\{0,\\dots,K\\}^3$ (0 = that stage 
 
 st.markdown("**Stage 1 -- does it fire this block?**")
 st.latex(r"\text{hunger}(t) = \max\!\big(0,\ \bar n(t) - n\big) + \kappa \cdot \tau")
-st.latex(r"w(t) = b + \sum_{s \in \{B,L,D\}} (h_s^{\text{ht}} - b)\, "
-         r"\exp\!\Big(-\tfrac12\big(\tfrac{t - c_s}{\sigma_s}\big)^2\Big)")
-st.latex(r"\ell_t = w(t) + \eta_t(t) + \lambda_{\text{persona},\,\text{stage}} "
+st.latex(r"w_i(t) = b + \sum_{s \in \{B,L,D\}} (h_s^{\text{ht}} - b)\, "
+         r"\exp\!\Big(-\tfrac12\big(\tfrac{t - c_s - j_{i,s}}{\sigma_s}\big)^2\Big)")
+st.latex(r"\ell_{i,t} = w_i(t) + \eta_t(t) + \lambda_{\text{persona},\,\text{stage}} "
          r"+ \alpha_0 \cdot \text{hunger}(t) "
-         r"- \kappa_{\text{price,time}} \cdot \gamma_{\text{cost}} \cdot \max\!\big(\text{price}(t) - \bar p,\ 0\big)")
-st.latex(r"q_t = \sigma(\ell_t) \cdot \Delta, \qquad \sigma(x) = \frac{1}{1+e^{-x}}, "
-         r"\qquad \text{fired} \sim \text{Bernoulli}(q_t) \ \text{ if eligible, else } 0")
+         r"- \kappa_{\text{price,time}} \cdot \gamma_{\text{cost}} \cdot \max\!\big(\text{price}(t) - \bar p,\ 0\big) "
+         r"+ \epsilon_{i,t}")
+st.latex(r"q_{i,t} = \sigma(\ell_{i,t}) \cdot \Delta, \qquad \sigma(x) = \frac{1}{1+e^{-x}}, "
+         r"\qquad \text{fired} \sim \text{Bernoulli}(q_{i,t}) \ \text{ if eligible, else } 0")
+st.caption(
+    "Two sources of realism noise sit in here, both off by default in the sense that "
+    "$j_{i,s}=0,\\ \\epsilon_{i,t}=0$ would reproduce a perfectly clean, fully-synchronised "
+    "population: $j_{i,s}$ is agent $i$'s own small, fixed-for-the-simulation personal offset to "
+    "stage $s$'s bump centre (sampled once, like $\\gamma$ -- some people habitually eat a bit "
+    "earlier/later every day); $\\epsilon_{i,t} \\sim \\mathcal{N}(0, \\sigma_{\\text{noise}})$ is "
+    "fresh idiosyncratic noise redrawn every block (today's whim). *Eligible* is normally "
+    "'this stage not yet eaten today', except for a small independent chance every block "
+    "(`repeat_meal_prob`) that re-opens an already-eaten stage anyway -- a second helping or "
+    "snack, logged as a real event but not double-counted in hunger."
+)
 
 st.markdown("**Stage 2 -- which meal, conditional on firing?**")
 st.latex(r"u_k = \gamma \cdot z_k + \eta_k - \gamma_{\text{cost}} \cdot \text{price}(t) \cdot e_k "
@@ -863,7 +939,9 @@ st.caption(
     "hazard-to-probability scale and per-block cap &middot; $\\gamma, z_k$ this agent's taste "
     "weights and meal $k$'s fixed attributes &middot; $e_k$ meal $k$'s grid energy (0 for "
     "fire-only meals -- their only tariff exposure is through $\\text{price}(t)-\\bar p$ in "
-    "Stage 1, since they have nothing to switch away from in Stage 2)."
+    "Stage 1, since they have nothing to switch away from in Stage 2) &middot; $j_{i,s}$ agent "
+    "$i$'s personal bump-centre offset for stage $s$ &middot; $\\epsilon_{i,t}$ fresh per-block "
+    "idiosyncratic noise."
 )
 
 st.markdown(theme.beads(), unsafe_allow_html=True)
@@ -911,7 +989,7 @@ with c1:
     ex_n = st.select_slider("Meals eaten so far today (n)", options=[0, 1, 2, 3], value=1)
 with c2:
     ex_tau = st.slider("Hours since last meal (tau)", 0.0, 24.0, 3.0, 0.5)
-st.caption("Assumes the currently-active stage's slot hasn't been eaten yet (still eligible to fire) -- "
+st.caption("Assumes the currently-relevant stage's slot hasn't been eaten yet (still eligible to fire) -- "
            "this is an illustration of the arithmetic, not a full state replay.")
 
 gamma_vec = population_mod.persona_gamma_vector(ex_persona)
@@ -919,43 +997,46 @@ gamma_cost_val = population_mod.persona_gamma_cost(ex_persona)
 lam_vec = population_mod.persona_lam_vector(ex_persona)
 scenario_obj = config.SCENARIOS[scenario_name]
 
-stage_idx = agent.active_stage(ex_hour)
-stage_name = agent.STAGE_ORDER[stage_idx] if stage_idx != -1 else None
+# Which stage is "now" -- whichever stage's own bump is highest at this instant (no individual
+# jitter, no hard stage_windows_hr clock gate), the same argmax test sim.agent.fire applies
+# per-agent. See agent.stage_bump's docstring.
+bump_vec = agent.stage_bump(ex_hour)
+stage_idx = int(np.argmax(bump_vec))
+stage_name = agent.STAGE_ORDER[stage_idx]
 
 st.markdown("#### Stage 1 -- firing hazard (does the agent start cooking at all)")
-if stage_idx == -1:
-    st.write(f"No stage window is open at {ex_hour:g}h (overnight gap) -- q = 0 regardless of hunger.")
-else:
-    nb = config.nbar(ex_hour)
-    hunger = max(0, nb - ex_n) + config.HUNGER.kappa * ex_tau
-    w = agent.w_of_t(ex_hour)
-    eta_t = agent.eta_t_of_t(ex_hour, scenario_obj)
-    lam_val = float(lam_vec[stage_idx])
-    price_term_1 = -config.TIMING.kappa_price_time * gamma_cost_val * max(ex_price - config.TARIFF.p_bar, 0.0)
-    logit = w + eta_t + lam_val + config.HUNGER.alpha0 * hunger + price_term_1
-    sig = 1.0 / (1.0 + np.exp(-logit))
-    q = sig * config.TIMING.DELTA
+st.write(f"Most-relevant stage right now: **{stage_name}** "
+         f"(highest of the three bumps -- breakfast={bump_vec[0]:.2f}, lunch={bump_vec[1]:.2f}, "
+         f"dinner={bump_vec[2]:.2f} -- no hard clock window, see Explainability notes above).")
+nb = config.nbar(ex_hour)
+hunger = max(0, nb - ex_n) + config.HUNGER.kappa * ex_tau
+w = float(bump_vec[stage_idx])
+eta_t = agent.eta_t_of_t(ex_hour, scenario_obj)
+lam_val = float(lam_vec[stage_idx])
+price_term_1 = -config.TIMING.kappa_price_time * gamma_cost_val * max(ex_price - config.TARIFF.p_bar, 0.0)
+logit = w + eta_t + lam_val + config.HUNGER.alpha0 * hunger + price_term_1
+sig = 1.0 / (1.0 + np.exp(-logit))
+q = sig * config.TIMING.DELTA
 
-    st.write(f"Active stage: **{stage_name}**")
-    st.latex(r"hunger = \max(0,\ \bar n(t) - n) + \kappa \cdot \tau")
-    st.write(f"= max(0, {nb} - {ex_n}) + {config.HUNGER.kappa:g} x {ex_tau:g}"
-             f" = {max(0, nb - ex_n):.3f} + {config.HUNGER.kappa * ex_tau:.3f} = **{hunger:.3f}**")
+st.latex(r"hunger = \max(0,\ \bar n(t) - n) + \kappa \cdot \tau")
+st.write(f"= max(0, {nb} - {ex_n}) + {config.HUNGER.kappa:g} x {ex_tau:g}"
+         f" = {max(0, nb - ex_n):.3f} + {config.HUNGER.kappa * ex_tau:.3f} = **{hunger:.3f}**")
 
-    st.latex(r"logit = w(t) + \eta_t + \lambda_{persona,stage} + \alpha_0 \cdot hunger"
-             r" - \kappa_{price,time} \cdot \gamma_{cost} \cdot (price(t) - \bar p)")
-    st.caption(f"price(t) is penalised *relative to* p_bar = {config.TARIFF.p_bar:g}, the "
-               "time-average price every candidate tariff is normalised to -- so a flat tariff "
-               "(price(t) = p_bar always) contributes exactly 0 here; only a tariff's "
-               "cheap/expensive *shape* around its own average pushes cooking earlier or later.")
-    st.write(f"= {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0:g} x {hunger:.3f}"
-             f" + (-{config.TIMING.kappa_price_time:g} x {gamma_cost_val:.2f} x "
-             f"({ex_price:.2f} - {config.TARIFF.p_bar:g}))"
-             f" = {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0 * hunger:.3f}"
-             f" + {price_term_1:.3f} = **{logit:.3f}**")
+st.latex(r"logit = w(t) + \eta_t + \lambda_{persona,stage} + \alpha_0 \cdot hunger"
+         r" - \kappa_{price,time} \cdot \gamma_{cost} \cdot (price(t) - \bar p)")
+st.caption(f"price(t) is penalised *relative to* p_bar = {config.TARIFF.p_bar:g}, the "
+           "time-average price every candidate tariff is normalised to -- so a flat tariff "
+           "(price(t) = p_bar always) contributes exactly 0 here; only a tariff's "
+           "cheap/expensive *shape* around its own average pushes cooking earlier or later.")
+st.write(f"= {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0:g} x {hunger:.3f}"
+         f" + (-{config.TIMING.kappa_price_time:g} x {gamma_cost_val:.2f} x "
+         f"({ex_price:.2f} - {config.TARIFF.p_bar:g}))"
+         f" = {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0 * hunger:.3f}"
+         f" + {price_term_1:.3f} = **{logit:.3f}**")
 
-    st.latex(r"q = \mathrm{sigmoid}(logit) \times DELTA")
-    st.write(f"= sigmoid({logit:.3f}) x {config.TIMING.DELTA:g} = {sig:.4f} x {config.TIMING.DELTA:g}"
-             f" = **{q:.4f}** (probability this agent starts cooking in this one 5-minute block)")
+st.latex(r"q = \mathrm{sigmoid}(logit) \times DELTA")
+st.write(f"= sigmoid({logit:.3f}) x {config.TIMING.DELTA:g} = {sig:.4f} x {config.TIMING.DELTA:g}"
+         f" = **{q:.4f}** (probability this agent starts cooking in this one 5-minute block)")
 
 st.markdown("#### Stage 2 -- which meal (softmax choice)")
 st.caption("Shown regardless of whether Stage 1 fires, to display the full arithmetic.")
@@ -1091,15 +1172,22 @@ st.markdown(
     "comparison -- samples the population **once** and reuses those exact same agents across every "
     "tariff and every run: same people, fresh dice each day. A tariff never gets compared against a "
     "different fictional population.\n\n"
-    "**Scoring.** `wood_share` pools every cook event from every one of the R runs for a tariff and "
-    "divides fire-only events by the total -- a population-and-day-pooled fraction, not a per-agent "
-    "average. `mean_daily_kwh_household` / `median_daily_kwh_household` pool each household agent's "
-    "per-run daily kWh total across all R runs, then summarise. The scoreboard sorts tariffs by "
-    "wood_share ascending.\n\n"
+    "**Scoring -- two separate goals, two separate metrics.** `clean_cooking_share` pools every "
+    "cook event from every one of the R runs for a tariff and divides electric events by the total "
+    "-- a population-and-day-pooled fraction, not a per-agent average (0 events, e.g. under "
+    "extreme_test, scores 0% clean, not 100% -- suppressing cooking altogether isn't clean cooking). "
+    "`peak_kw` / `load_factor` score the *other* thing these tariffs are meant to do -- flatten the "
+    "village's demand curve, not just relocate fuel choice -- as the mean, across runs, of each "
+    "day's peak demand and its (average demand / peak demand) ratio (1.0 = perfectly flat). A tariff "
+    "can win on one and lose on the other: evening_peak currently has the *best* clean_cooking_share "
+    "but also the *tallest* peak_kw of the three real tariffs, because agents who dodge its expensive "
+    "window pile back onto the grid at the cheap hours instead. `mean_daily_kwh_household` / "
+    "`median_daily_kwh_household` pool each household agent's per-run daily kWh total across all R "
+    "runs, then summarise. The scoreboard sorts tariffs by clean_cooking_share descending.\n\n"
     "**What you watch while it runs.** The progress bar and live metrics in the Live model section "
     "are this exact loop instrumented with a callback that fires after every simulated day (see "
-    "`run_sweep`'s `progress_callback`) -- the running wood-share and meals-simulated counters are "
-    "genuine partial sums of the same events that end up in the final scoreboard, not a separate "
+    "`run_sweep`'s `progress_callback`) -- the running clean-cooking-% and meals-simulated counters "
+    "are genuine partial sums of the same events that end up in the final scoreboard, not a separate "
     "estimate.\n\n"
     "**One more thing.** The House map day-playback panel is *not* one of the R runs behind the "
     "scoreboard -- it re-simulates one fresh representative day for whichever tariff you pick in "
