@@ -8,6 +8,7 @@ population sampled once and shared across tariffs/runs (fresh dice, same agents)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
@@ -45,8 +46,8 @@ def _trace_row(idx: int, t_block: int, t_hr: float, state: agent.AgentState,
         "tau": float(state.tau[idx]), "hunger": float(fr.hunger[idx]),
         "stage_idx": fr.stage_idx, "eligible": bool(fr.eligible[idx]),
         "w": float(fr.w), "eta_t": float(fr.eta_t), "lam": float(fr.lam[idx]),
-        "alpha0_hunger": float(fr.alpha0_hunger[idx]), "q": float(fr.q[idx]),
-        "fired": bool(fr.fired[idx]),
+        "alpha0_hunger": float(fr.alpha0_hunger[idx]), "price_term": float(fr.price_term[idx]),
+        "q": float(fr.q[idx]), "fired": bool(fr.fired[idx]),
     }
     if fr.fired[idx]:
         choice = int(wh.choice[idx])
@@ -73,7 +74,7 @@ def simulate_day(population: population_mod.Population, price: np.ndarray, scena
 
     for t_block in range(T):
         t_hr = t_block * BLOCK_HOURS
-        fr = agent.fire(state, t_hr, population, scenario, rng, no_hunger=no_hunger)
+        fr = agent.fire(state, t_hr, population, scenario, price[t_block], rng, no_hunger=no_hunger)
         wh = agent.which(state, population, scenario, price[t_block], fr.fired, fr.hunger,
                           rng, no_hunger=no_hunger)
 
@@ -117,7 +118,13 @@ class TariffRunResult:
 def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: int | None = None,
               R: int | None = None, n_agents: int | None = None, no_hunger: bool = False,
               no_cost: bool = False, no_personas: bool = False,
-              trace_agent: int | None = None) -> tuple[dict[str, TariffRunResult], population_mod.Population]:
+              trace_agent: int | None = None,
+              progress_callback: Callable[[dict], None] | None = None,
+              ) -> tuple[dict[str, TariffRunResult], population_mod.Population]:
+    """progress_callback, if given, is called after every simulated day with a dict:
+    tariff_idx/n_tariffs/tariff_name, run_idx/R, and running totals (events_so_far,
+    wood_events_so_far, wood_share_so_far) -- everything a UI needs to show live progress
+    without recomputing anything from the (potentially large) event list itself."""
     seed = config.DEFAULT_SEED if seed is None else seed
     R = config.SCORING.R if R is None else R
     n_agents = config.N_AGENTS if n_agents is None else n_agents
@@ -129,11 +136,14 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
     population = population_mod.build_population(pop_rng, n_agents=n_agents,
                                                     no_personas=no_personas, no_cost=no_cost)
 
+    n_tariffs = len(tariff_names)
     results: dict[str, TariffRunResult] = {}
-    for tname, tseed in zip(tariff_names, tariff_seeds):
+    for ti, (tname, tseed) in enumerate(zip(tariff_names, tariff_seeds)):
         price = tariffs_mod.build_tariff(tname)
         run_seeds = tseed.spawn(R)
         demand_curves, all_events, trace_rows, daily_kwh_per_run = [], [], [], []
+        running_events = 0
+        running_wood = 0
         for r, rseed in enumerate(run_seeds):
             rng = np.random.default_rng(rseed)
             day = simulate_day(population, price, scenario, rng, no_hunger=no_hunger,
@@ -146,6 +156,16 @@ def run_sweep(tariff_names: list[str], scenario_name: str = "reference", seed: i
             daily_kwh_per_run.append(kwh)
             if r == 0:
                 trace_rows = day.trace_rows
+
+            running_events += len(day.events)
+            running_wood += sum(1 for e in day.events if meals.WOOD_MASK[e.meal_idx0])
+            if progress_callback is not None:
+                progress_callback({
+                    "tariff_idx": ti, "n_tariffs": n_tariffs, "tariff_name": tname,
+                    "run_idx": r, "R": R,
+                    "events_so_far": running_events, "wood_events_so_far": running_wood,
+                    "wood_share_so_far": (running_wood / running_events) if running_events else 0.0,
+                })
         results[tname] = TariffRunResult(tariff_name=tname, price=price, events_all_runs=all_events,
                                           demand_curves=demand_curves,
                                           trace_rows=trace_rows, daily_kwh_per_run=daily_kwh_per_run)

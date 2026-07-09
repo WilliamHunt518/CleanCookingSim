@@ -89,9 +89,10 @@ class FireResult:
     lam: np.ndarray         # (N,) persona lam for the active stage (0 if no stage active)
     hunger: np.ndarray      # (N,)
     alpha0_hunger: np.ndarray  # (N,) = alpha0_eff * hunger (the logit contribution)
+    price_term: np.ndarray  # (N,) = -kappa_price_time * gamma_cost * price(t) (the logit contribution)
 
 
-def fire(state: AgentState, t_hr: float, population, scenario, rng: np.random.Generator,
+def fire(state: AgentState, t_hr: float, population, scenario, price_t: float, rng: np.random.Generator,
          no_hunger: bool = False) -> FireResult:
     n_agents = state.h.shape[0]
     hunger = hunger_of(state.h, state.tau, t_hr)
@@ -109,12 +110,35 @@ def fire(state: AgentState, t_hr: float, population, scenario, rng: np.random.Ge
         eligible = state.h[:, stage_idx] == 0
 
     alpha0_hunger = alpha0_eff * hunger
-    logit = w + eta_t + lam + alpha0_hunger
+    # Re-uses each agent's own gamma_cost (already zeroed by the --no-cost ablation) so a
+    # price-sensitive persona is price-sensitive about *when* to cook, not just *what* --
+    # a high price right now makes cooking at all less attractive, delaying the decision
+    # until price drops or hunger overrides it. kappa_price_time sets the relative strength
+    # of this effect vs. the existing Stage 2 meal-choice cost term.
+    #
+    # Penalise price(t) *relative to the tariff's own time-average* (p_bar), not its raw
+    # level: every candidate tariff is normalised to the same p_bar (see sim.tariffs), so a
+    # raw-price penalty would uniformly suppress firing under every tariff by roughly the same
+    # amount -- including "flat", which should be the price-shape-neutral reference and see no
+    # timing effect at all. Centering on p_bar makes only each tariff's time-varying *shape*
+    # (cheap vs. expensive relative to its own average) push cooking earlier/later.
+    #
+    # Clipped to only ever penalise (never reward): price is a deterrent that can delay/suppress
+    # a meal, not an inducement that invents a new eating occasion. Without the clip, a cheap
+    # off-peak hour gives *every* agent a positive hazard boost -- including a school in its
+    # breakfast/dinner stage, whose lam=-6 is a hard institutional-schedule constraint ("school
+    # only serves lunch"), not an economic one. That boost was eroding lam=-6 enough that cheap
+    # tariffs (evening_peak's off-peak hours, solar_following's midday trough) made schools
+    # noticeably more likely to fire breakfast/dinner than under flat -- a school shouldn't
+    # start serving breakfast at 10am just because power is cheap then.
+    price_term = -config.TIMING.kappa_price_time * population.gamma_cost * np.maximum(
+        price_t - config.TARIFF.p_bar, 0.0)
+    logit = w + eta_t + lam + alpha0_hunger + price_term
     q = sigmoid(logit) * config.TIMING.DELTA
     fired = (rng.random(n_agents) < q) & eligible
 
     return FireResult(fired=fired, eligible=eligible, stage_idx=stage_idx, q=q, w=w, eta_t=eta_t,
-                       lam=lam, hunger=hunger, alpha0_hunger=alpha0_hunger)
+                       lam=lam, hunger=hunger, alpha0_hunger=alpha0_hunger, price_term=price_term)
 
 
 @dataclass

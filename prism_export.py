@@ -34,13 +34,18 @@ def _hunger(h: list[int], tau_hr: float, t_hr: float) -> float:
     return max(0, nb - n) + config.HUNGER.kappa * tau_hr
 
 
-def _fire_prob(h: list[int], tau_hr: float, t_hr: float, lam_vec: np.ndarray) -> tuple[int, float, float]:
+def _fire_prob(h: list[int], tau_hr: float, t_hr: float, lam_vec: np.ndarray,
+                gamma_cost: float) -> tuple[int, float, float]:
     stage_idx = agent.active_stage(t_hr)
     hunger = _hunger(h, tau_hr, t_hr)
     if stage_idx == -1 or h[stage_idx] != 0:
         return stage_idx, 0.0, hunger
     w = agent.w_of_t(t_hr)
-    logit = w + lam_vec[stage_idx] + config.HUNGER.alpha0 * hunger
+    # PRICE_FLAT == p_bar (this export always uses the flat reference tariff), so this term is
+    # identically 0 here -- see sim.agent.fire's docstring comment for why it's centered on p_bar
+    # and clipped to never reward a below-average price, only penalise an above-average one.
+    price_term = -config.TIMING.kappa_price_time * gamma_cost * max(PRICE_FLAT - config.TARIFF.p_bar, 0.0)
+    logit = w + lam_vec[stage_idx] + config.HUNGER.alpha0 * hunger + price_term
     q = float(1.0 / (1.0 + np.exp(-logit)) * config.TIMING.DELTA)
     return stage_idx, q, hunger
 
@@ -70,7 +75,7 @@ def build_chain(persona: str = "household"):
         for (tt, hb, hl, hd, tau_ticks) in layer:
             h = [hb, hl, hd]
             tau_hr = tau_ticks * (BLOCK_MIN / 60.0)
-            stage_idx, q, hunger = _fire_prob(h, tau_hr, t_hr, lam_vec)
+            stage_idx, q, hunger = _fire_prob(h, tau_hr, t_hr, lam_vec, gamma_cost)
             tau_next_no_fire = min(tau_ticks + 1, TAU_TICKS_MAX)
             branches: list[tuple[float, tuple, int]] = []
 

@@ -58,6 +58,33 @@ def test_raising_price_shifts_choice_toward_wood_away_from_big_ecook():
     assert high.probs[0, big_ecook] < low.probs[0, big_ecook]
 
 
+def test_raising_price_suppresses_firing_hazard():
+    """Stage 1: a price-sensitive agent should be less likely to fire (start cooking at all)
+    when price is high, not just steered toward a different meal once it does fire."""
+    pop = make_population(n=1, gamma_cost=1.2)
+    state = agent.init_state(1)
+    rng = np.random.default_rng(0)
+    scenario = DummyScenario()
+
+    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0, rng=rng)
+    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0, rng=rng)
+
+    assert fr_expensive.q[0] < fr_cheap.q[0]
+
+
+def test_no_cost_ablation_zeroes_firing_price_sensitivity_too():
+    """gamma_cost=0 (the --no-cost ablation) should make Stage 1 price-blind as well as Stage 2."""
+    pop = make_population(n=1, gamma_cost=0.0)
+    state = agent.init_state(1)
+    rng = np.random.default_rng(0)
+    scenario = DummyScenario()
+
+    fr_cheap = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=0.0, rng=rng)
+    fr_expensive = agent.fire(state, t_hr=18.5, population=pop, scenario=scenario, price_t=5.0, rng=rng)
+
+    assert fr_expensive.q[0] == pytest.approx(fr_cheap.q[0])
+
+
 def test_hunger_grows_when_meal_skipped_and_resets_on_eating():
     h = np.zeros((1, 3), dtype=int)
     tau0 = np.array([0.0])
@@ -82,16 +109,16 @@ def test_stage_windows_respected_no_dinner_at_8am():
     scenario = DummyScenario()
 
     state = agent.init_state(1)
-    fr_morning = agent.fire(state, t_hr=8.0, population=pop, scenario=scenario, rng=rng)
+    fr_morning = agent.fire(state, t_hr=8.0, population=pop, scenario=scenario, price_t=0.25, rng=rng)
     assert fr_morning.stage_idx == 0
     assert fr_morning.eligible[0]
 
-    fr_evening = agent.fire(state, t_hr=20.0, population=pop, scenario=scenario, rng=rng)
+    fr_evening = agent.fire(state, t_hr=20.0, population=pop, scenario=scenario, price_t=0.25, rng=rng)
     assert fr_evening.stage_idx == 2
 
     state_dinner_done = agent.init_state(1)
     state_dinner_done.h[0, 2] = meals.IDX_BY_NAME["ugali_ndengu_stew"] + 1
-    fr_after = agent.fire(state_dinner_done, t_hr=20.0, population=pop, scenario=scenario, rng=rng)
+    fr_after = agent.fire(state_dinner_done, t_hr=20.0, population=pop, scenario=scenario, price_t=0.25, rng=rng)
     assert not fr_after.eligible[0]
     assert not fr_after.fired[0]
 

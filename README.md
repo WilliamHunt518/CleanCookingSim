@@ -83,12 +83,42 @@ placeholder guess rather than a sourced number (currently the large majority
 of parameters -- this is a brand-new model). Before trusting the scoreboard
 for a real decision, work through that list.
 
-One parameter was already empirically re-tuned away from its initial guess:
-`DELTA` (the hazard-to-probability scale) started at the spec's suggested
-0.05, which produced only ~37% of agents eating all 3 meals in a day. It was
-raised to 0.15, which reaches ~90%, matching the calibration target the spec
-called for. It is still flagged `tbd=True` because 0.15 is itself a guess,
-not a sourced number -- just a better-calibrated one.
+Four parameters were already empirically re-tuned away from their initial
+guess. `DELTA` (the hazard-to-probability scale) started at the spec's
+suggested 0.05, which produced only ~37% of agents eating all 3 meals in a
+day. It was raised to 0.15, which reaches ~90%, matching the calibration
+target the spec called for. `base_gamma_cost` (price sensitivity, Stage 2 --
+which meal) went through two passes: 1.2 gave only a ~17% relative wood_share
+gap between tariffs, too subtle to see on the scoreboard; a first re-tune to
+2.5 helped but was still muted once agents could dodge expensive hours by
+rescheduling rather than switching fuel. It's now 4.5. `kappa_price_time`
+(new parameter, Stage 1 -- price's pull on *when* to cook, not just what)
+started at 0 -- price only ever changed meal choice at a fixed time, so
+cooking timing was identical across every tariff, which understates how a
+real evening-peak price would displace the dinner rush rather than just push
+it onto wood. It's now 4.0, clipped so a below-average price can only ever
+leave the hazard unchanged, never boost it (see the comment in
+`sim/agent.py::fire` -- an earlier unclipped version let cheap off-peak hours
+override a school's `lam=-6` "lunch only" schedule constraint, since that
+constraint is institutional, not economic). `p_hi`/`p_lo` (the
+evening_peak/solar_following price levels) were widened from 0.45/0.10 to
+0.60/0.05 alongside these. Together: the share of evening_peak dinners still
+starting inside the 17-21h peak window drops from ~85% to ~0%, wood_share
+spans ~0.22 (evening_peak) to ~0.42 (flat) across the three realistic
+tariffs -- note evening_peak now scores *best*, not worst, since its cheap
+off-peak hours dominate its day and a price-responsive population reschedules
+into them rather than eating electric at peak -- and there's a fifth,
+deliberately-not-realistic tariff candidate, `extreme_test` (flat,
+`extreme_test_multiplier`=5x p_bar, opt-in via the "Tariffs to sweep"
+picker): a sanity check that the price response actually saturates at an
+extreme input rather than silently no-op'ing -- at the current
+base_gamma_cost/kappa_price_time it drives cook-start events to exactly zero
+across 100 independent simulated days (not just a low wood_share -- Stage 1
+doesn't know which fuel an agent would pick until *after* it fires, so an
+extreme enough price suppresses firing altogether rather than diverting it
+to wood). All parameters are still
+flagged `tbd=True` because the new values are themselves guesses, not
+sourced numbers -- just better-calibrated ones.
 
 ## Ablation tuning workflow
 

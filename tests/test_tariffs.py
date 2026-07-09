@@ -4,8 +4,20 @@ from sim import config, tariffs
 
 
 def test_all_candidates_normalise_to_common_mean():
+    """extreme_test is deliberately excluded: it's a sanity-check stress tariff at an elevated
+    price *level* (see test_extreme_test_tariff_is_uniformly_elevated), not a realistic candidate
+    reshaped around the same average like the others."""
     for name, price in tariffs.all_tariffs().items():
+        if name == "extreme_test":
+            continue
         assert np.isclose(price.mean(), config.TARIFF.p_bar), name
+
+
+def test_extreme_test_tariff_is_uniformly_elevated():
+    price = tariffs.tariff_extreme_test()
+    expected = config.TARIFF.p_bar * config.TARIFF.extreme_test_multiplier
+    assert np.all(np.isclose(price, expected))
+    assert expected > config.TARIFF.p_hi
 
 
 def test_evening_peak_is_higher_in_peak_window_than_flat():

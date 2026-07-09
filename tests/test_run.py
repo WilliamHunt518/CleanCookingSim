@@ -40,3 +40,16 @@ def test_different_seeds_give_different_results():
     d1 = np.stack(results1["flat"].demand_curves)
     d2 = np.stack(results2["flat"].demand_curves)
     assert not np.array_equal(d1, d2)
+
+
+def test_extreme_test_tariff_saturates_toward_almost_no_cooking():
+    """Sanity check that price response saturates at an extreme input (sim/tariffs.py's
+    extreme_test candidate, 5x p_bar) rather than silently no-op'ing: Stage 1 doesn't know which
+    fuel an agent would pick until *after* it fires, so an extreme enough price should crush
+    firing altogether, not just push it toward wood -- meals/day should collapse, not settle at
+    a normal-looking number."""
+    results, _ = run.run_sweep(["flat", "extreme_test"], seed=0, R=30, n_agents=40)
+    n_flat = len(results["flat"].events_all_runs)
+    n_extreme = len(results["extreme_test"].events_all_runs)
+    assert n_flat > 0
+    assert n_extreme < 0.1 * n_flat

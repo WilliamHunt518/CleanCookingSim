@@ -94,6 +94,7 @@ class TimingConfig:
     bump_heights: dict
     bump_width_hr: float
     DELTA: float
+    kappa_price_time: float
     stage_windows_hr: dict
 
 
@@ -126,6 +127,34 @@ TIMING = TimingConfig(
             "The single most important tuning knob for how often anyone cooks at all -- "
             "raise it so more agents complete 3 meals/day, lower it for a sparser day.",
             tbd=True),
+    kappa_price_time=p("timing", "kappa_price_time", 4.0, "logit per (currency/kWh, scaled by gamma_cost)",
+                        "Stage 1 (does it fire at all) price penalty: price_term = -kappa_price_time * "
+                        "gamma_cost * max(price(t) - p_bar, 0), added into the firing-hazard logit "
+                        "alongside w(t)/eta_t/lam/hunger. Centered on p_bar (the time-average every "
+                        "candidate tariff is normalised to) so a flat tariff -- always at p_bar -- "
+                        "contributes exactly 0 and only a tariff's cheap/expensive *shape* moves timing; "
+                        "a raw-price penalty would otherwise suppress firing under every tariff by "
+                        "roughly the same amount, including the reference case. Clipped at 0 (never "
+                        "negative, i.e. never a reward) so a below-average price cannot *boost* firing "
+                        "hazard -- price is a deterrent that can delay/suppress a meal, not an "
+                        "inducement that invents a new eating occasion. Without the clip, a cheap "
+                        "off-peak hour gave every agent a positive hazard boost including a school in "
+                        "its breakfast/dinner stage, where lam=-6 is a hard institutional-schedule "
+                        "constraint, not an economic one -- that boost was eroding lam=-6 enough that "
+                        "schools fired breakfast noticeably more often under evening_peak/solar_following "
+                        "than under flat. Re-uses each agent's own gamma_cost (so --no-cost zeroes this "
+                        "too) rather than a separate parameter -- a price-sensitive persona is "
+                        "price-sensitive about *when* to cook, not just *what*. Without this term at all, "
+                        "price only ever changed Stage 2 (meal choice at a fixed time); cooking timing "
+                        "was identical across every tariff. Empirically tuned alongside base_gamma_cost "
+                        "and the widened p_hi/p_lo gap: 4.0 cuts the share of evening_peak dinners still "
+                        "starting inside its 17-21h peak window from ~85% to ~0% and evening_peak's "
+                        "meals/day from ~2.8 to ~2.0 -- displaced agents mostly reschedule into cheap "
+                        "hours and cook electrically there, so the tariff's harm shows up as "
+                        "skipped/delayed meals as much as fuel-switching.",
+                        "Higher = tariffs visibly reshape *when* the population cooks, not just what they "
+                        "cook; too high and expensive-hour agents mostly stop firing rather than shifting.",
+                        tbd=True),
     stage_windows_hr=p("timing", "stage_windows_hr",
                         {"breakfast": (5.0, 11.0), "lunch": (11.0, 16.0), "dinner": (16.0, 23.0)},
                         "hour (24h clock)",
@@ -365,11 +394,23 @@ PERSONAS = PersonaConfig(
                  "ing_cost/prep_min should stay negative (they are costs); raising |ing_cost|/|prep_min| "
                  "makes agents avoid expensive/demanding meals more strongly.",
                  tbd=True),
-    base_gamma_cost=p("personas", "base_gamma_cost", 1.2, "utils per (currency/kWh * kWh)",
+    base_gamma_cost=p("personas", "base_gamma_cost", 4.5, "utils per (currency/kWh * kWh)",
                        "Household price sensitivity: weight on -price(t)*e_k in the choice utility. "
-                       "THE only channel through which the grid tariff affects behaviour. Not part of "
+                       "THE only channel through which the grid tariff affects meal choice (Stage 2; "
+                       "see kappa_price_time for the analogous Stage 1 timing channel). Not part of "
                        "master_table_Z.md (that table has no tariff/price-sensitivity concept); shared "
-                       "across all personas since the source table gives no override.",
+                       "across all personas since the source table gives no override. Empirically "
+                       "re-tuned twice (see README): 1.2 gave only a ~17% relative wood_share gap "
+                       "between tariffs -- too subtle to read off the scoreboard. 2.5 fixed that but "
+                       "still felt muted once kappa_price_time/p_hi/p_lo let agents dodge expensive "
+                       "hours by rescheduling rather than switching fuel. 4.5 (alongside "
+                       "kappa_price_time=4.0) makes the scoreboard spread unmistakable -- wood_share "
+                       "0.22 (evening_peak) to 0.42 (flat), a ~2x range -- while mean household kWh "
+                       "still stays in a plausible 2.0-2.3 range. Note the ordering: evening_peak now "
+                       "scores *best*, not worst -- its cheap off-peak hours (p_lo=0.05) dominate its "
+                       "day, and a price-responsive population mostly reschedules into them rather than "
+                       "eating electric at peak, so it out-performs flat's constant moderate price. Still "
+                       "flagged tbd=True since 4.5 itself is a guess, not a sourced number.",
                        "The single most important knob for tariff response -- raise it and high prices "
                        "push agents toward fire-only meals much more sharply.",
                        tbd=True),
@@ -484,6 +525,7 @@ class TariffConfig:
     pv_clearness: float
     pv_t_rise_hr: float
     pv_t_set_hr: float
+    extreme_test_multiplier: float
 
 
 TARIFF = TariffConfig(
@@ -491,13 +533,19 @@ TARIFF = TariffConfig(
             "Common time-average price every candidate tariff is normalised to.",
             "Scales all tariffs up/down together; relative shape (peak/flat/solar) is what's compared.",
             tbd=True),
-    p_lo=p("tariff", "p_lo", 0.10, "currency/kWh",
+    p_lo=p("tariff", "p_lo", 0.05, "currency/kWh",
            "Off-peak / low price level used by evening_peak and solar_following.",
-           "Lower = cheaper off-peak incentive to shift load away from the peak/evening.",
+           "Lower = cheaper off-peak incentive to shift load away from the peak/evening. Widened from "
+           "0.10 alongside p_hi so the peak/off-peak gap is large enough to visibly move both meal "
+           "choice and cooking timing (see kappa_price_time).",
            tbd=True),
-    p_hi=p("tariff", "p_hi", 0.45, "currency/kWh",
+    p_hi=p("tariff", "p_hi", 0.60, "currency/kWh",
            "Peak price level used by evening_peak and solar_following.",
-           "Higher = stronger price signal to avoid cooking electrically at peak times -- more wood defection.",
+           "Higher = stronger price signal to avoid cooking electrically at peak times -- more wood "
+           "defection and more timing displacement. Raised from 0.45: at 0.45 the peak/off-peak gap "
+           "(0.35) gave a real but modest response; 0.60 (gap 0.55 around p_bar=0.25) makes the "
+           "evening_peak tariff's effect unmistakable on both the wood_share scoreboard and the "
+           "cooking-events-over-time chart.",
            tbd=True),
     w_peak_hr=p("tariff", "w_peak_hr", (17.0, 21.0), "hour (24h clock)",
                  "Evening peak window for the evening_peak tariff.",
@@ -519,6 +567,21 @@ TARIFF = TariffConfig(
                    "Sunset time used by the PV stub.",
                    "Earlier sunset shrinks the window where solar_following prices are cheap.",
                    tbd=True),
+    extreme_test_multiplier=p("tariff", "extreme_test_multiplier", 5.0, "multiple of p_bar",
+                               "Flat price used by the extreme_test tariff candidate: p_bar * this "
+                               "multiplier, held constant all day. Deliberately NOT normalised back "
+                               "down to p_bar like every other candidate (see sim.tariffs.tariff_"
+                               "extreme_test) -- the whole point is an absurdly elevated price *level*, "
+                               "not just a reshaped-but-equal-average price. A sanity-check tariff: if "
+                               "the model is responding to price correctly, this should crush cooking "
+                               "toward near-zero rather than silently no-op at extreme inputs. At the "
+                               "current base_gamma_cost/kappa_price_time it does exactly that -- zero "
+                               "cook-start events across 100 independent simulated days, not just a low "
+                               "wood_share, since Stage 1 (does it fire at all) doesn't know which fuel "
+                               "an agent would pick until *after* it fires, so a price this extreme "
+                               "suppresses firing altogether rather than diverting it to wood.",
+                               "Higher = a harsher stress test; should push meals/day toward 0.",
+                               tbd=True),
 )
 
 

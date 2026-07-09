@@ -52,10 +52,24 @@ def tariff_solar_following() -> np.ndarray:
     return _normalise(price)
 
 
+def tariff_extreme_test() -> np.ndarray:
+    """Deliberately absurd flat price at extreme_test_multiplier x p_bar (default 5x), held all
+    day -- a sanity-check tariff, not a realistic candidate. Every other tariff is normalised
+    back to the same time-average p_bar (see _normalise) so only *shape* differs between them;
+    this one is intentionally NOT renormalised, since the point is to test an elevated price
+    *level*. If the model's price response is working, firing should be heavily suppressed at
+    every hour (Stage 1), not just shifted -- meals/day should collapse toward 0, not settle at
+    a normal-looking number. Because Stage 1 doesn't know which fuel an agent would pick until
+    *after* it fires, an extreme enough price suppresses cooking altogether rather than diverting
+    it to wood -- wood_share isn't a reliable saturation signal here the way meals/day is."""
+    return np.full(T, config.TARIFF.p_bar * config.TARIFF.extreme_test_multiplier)
+
+
 CANDIDATES = {
     "flat": tariff_flat,
     "evening_peak": tariff_evening_peak,
     "solar_following": tariff_solar_following,
+    "extreme_test": tariff_extreme_test,
 }
 
 
