@@ -18,15 +18,16 @@ class SiteConfig:
     tilt_deg: float = 15.0           # near-equator site -- a low tilt suits a near-overhead sun
     orientation_deg: float = 180.0   # panel azimuth, 180 = south-facing (quartz-solar-forecast default)
 
+PV_max_kwp = 60.0          # nameplate PV array capacity [kWp], passed to quartz-solar-forecast
 
 @dataclass(frozen=True)
 class PVConfig:
-    rated_kwp: float = 120.0          # nameplate PV array capacity [kWp], passed to quartz-solar-forecast
+    rated_kwp: float = PV_max_kwp          # nameplate PV array capacity [kWp], passed to quartz-solar-forecast
 
 
 @dataclass(frozen=True)
 class BatteryConfig:
-    capacity_kwh: float = 30.0       # BC [kWh] (Oloika upgraded lithium-ion bank)
+    capacity_kwh: float = PV_max_kwp * (25/54)  # BC [kWh] (Oloika upgraded lithium-ion bank)
     soc_init_pct: float = 0.0       # starting state of charge, percent of BC
 
 

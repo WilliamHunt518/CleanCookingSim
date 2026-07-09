@@ -70,3 +70,35 @@ def test_forecast_day_builds_a_fresh_site_every_call():
 
     assert len(build_calls) == 7
     assert len(set(build_calls)) == 7  # every call got a distinct, freshly-built site object
+
+
+def test_forecast_day_clips_negative_power_to_zero():
+    """Regression test: quartz-solar-forecast's 'gb' model is a gradient-boosted regressor with
+    no physical non-negativity constraint on its own output -- it can and does predict slightly
+    negative power_kw during low-irradiance transitions (observed live: ~4% of blocks, down to
+    about -7 kW at 120 kWp scale, clustered around dawn ramp-up and brief midday cloud dips).
+    forecast_day_kw must clip that to 0 before it reaches soc.compute_soc, which would otherwise
+    book negative PV as extra usage."""
+
+    def fake_run_forecast(site, ts, nwp_source, model):
+        idx = pd.date_range(start=ts, periods=quartz_forecast.BLOCKS_PER_DAY, freq="15min")
+        values = np.full(len(idx), 5.0)
+        values[10] = -3.5   # simulate the model's dawn/midday negative-regression artifact
+        values[11] = -0.1
+        return pd.DataFrame({"power_kw": values}, index=idx)
+
+    fake_pkg = types.ModuleType("quartz_solar_forecast")
+    fake_forecast_mod = types.ModuleType("quartz_solar_forecast.forecast")
+    fake_forecast_mod.run_forecast = fake_run_forecast
+    fake_pkg.forecast = fake_forecast_mod
+
+    with patch.object(quartz_forecast, "_patch_requests_cache", lambda: None), \
+         patch.object(quartz_forecast, "_build_site", return_value=object()), \
+         patch.dict(sys.modules, {"quartz_solar_forecast": fake_pkg,
+                                   "quartz_solar_forecast.forecast": fake_forecast_mod}):
+        day_df = quartz_forecast.forecast_day_kw(None, None, None, pd.Timestamp("2026-01-01"))
+
+    assert np.all(day_df["power_kw"] >= 0.0)
+    assert day_df["power_kw"].iloc[10] == 0.0
+    assert day_df["power_kw"].iloc[11] == 0.0
+    assert day_df["power_kw"].iloc[0] == 5.0  # untouched elsewhere

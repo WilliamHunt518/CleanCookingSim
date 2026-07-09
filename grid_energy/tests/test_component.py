@@ -54,3 +54,57 @@ def test_forecast_pv_week_passes_through_site_overrides():
 
     mock_forecast.assert_called_once_with(
         latitude=1.0, longitude=2.0, capacity_kwp=99.0, start="2026-01-01", nwp_source="gfs")
+
+
+def test_compute_soc_for_usage_passes_through_battery_overrides():
+    """capacity_kwh / soc_init_pct set on the component must reach soc.compute_soc unchanged --
+    this is what lets a caller size the battery per-scenario instead of only via config.py."""
+    forecast = _fake_week_forecast(power_kw_value=1.0, n_blocks=96)
+    usage_5min = np.full(288, 1.0)
+
+    component = GridEnergyComponent(capacity_kwh=42.0, soc_init_pct=77.0)
+    with patch("grid_energy.component.soc_mod.compute_soc") as mock_compute_soc:
+        component.compute_soc_for_usage(usage_5min, usage_block_minutes=5.0, forecast=forecast)
+
+    _, kwargs = mock_compute_soc.call_args
+    assert kwargs["capacity_kwh"] == 42.0
+    assert kwargs["soc_init_pct"] == 77.0
+
+
+def test_unset_capacity_and_battery_fields_pass_through_as_none_to_use_config_defaults():
+    """No capacity_kwp/capacity_kwh/soc_init_pct given -> the component must forward None,
+    not read config.py itself -- config.PV/config.BATTERY defaults are applied one layer down,
+    inside quartz_forecast.forecast_week_kw / soc.compute_soc, not duplicated here."""
+    component = GridEnergyComponent()
+
+    with patch("grid_energy.component.quartz_forecast.forecast_week_kw") as mock_forecast:
+        component.forecast_pv_week()
+    assert mock_forecast.call_args.kwargs["capacity_kwp"] is None
+
+    forecast = _fake_week_forecast(power_kw_value=1.0, n_blocks=96)
+    usage_5min = np.full(288, 1.0)
+    with patch("grid_energy.component.soc_mod.compute_soc") as mock_compute_soc:
+        component.compute_soc_for_usage(usage_5min, usage_block_minutes=5.0, forecast=forecast)
+    assert mock_compute_soc.call_args.kwargs["capacity_kwh"] is None
+    assert mock_compute_soc.call_args.kwargs["soc_init_pct"] is None
+
+
+def test_capacity_kwh_override_changes_soc_math_end_to_end():
+    """Not just a pass-through check -- confirms a smaller/larger capacity_kwh on the component
+    actually changes the resulting SOC numbers, using the real (unmocked) soc.compute_soc."""
+    # constant PV surplus of +2 kW every 15-min block, zero usage
+    forecast = _fake_week_forecast(power_kw_value=2.0, n_blocks=8)
+    usage_5min = np.zeros(8 * 3)  # 5-min-resolution zeros, resamples 1:1 in energy terms
+
+    small_battery = GridEnergyComponent(capacity_kwh=1.0, soc_init_pct=0.0)
+    big_battery = GridEnergyComponent(capacity_kwh=100.0, soc_init_pct=0.0)
+
+    small_result = small_battery.compute_soc_for_usage(usage_5min, usage_block_minutes=5.0, forecast=forecast)
+    big_result = big_battery.compute_soc_for_usage(usage_5min, usage_block_minutes=5.0, forecast=forecast)
+
+    # same PV, same usage: the small battery fills up and starts overflowing almost immediately,
+    # the big one never does over just 8 blocks
+    assert small_result.surplus_kwh.sum() > 0.0
+    assert big_result.surplus_kwh.sum() == 0.0
+    assert small_result.actual_soc_pct.max() == 100.0
+    assert big_result.actual_soc_pct.max() < 100.0

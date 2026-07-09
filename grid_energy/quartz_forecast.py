@@ -92,12 +92,21 @@ def forecast_day_kw(latitude: float | None, longitude: float | None, capacity_kw
     already-mutated capacity_kwp=4, so predict_ocf's `if site.capacity_kwp > 4` check silently
     fails and it stops rescaling -- every call after the first would return a forecast ~scaled
     for a 4 kWp site while claiming to be for the real (larger) capacity.
+
+    Also clips power_kw to >= 0: the "gb" model is a gradient-boosted regression tree predicting
+    power_kw as a raw numeric target, with no physical non-negativity constraint enforced by the
+    library. It regularly regresses slightly below zero during low-irradiance transitions (dawn
+    ramp-up, brief heavy-cloud dips) -- observed ~4% of blocks in testing, up to about -7 kW at
+    120 kWp scale. That's a fitting artifact of the underlying model, not a real "the panel drew
+    power from the grid" event, so it's clipped here rather than passed through to soc.compute_soc
+    (which would otherwise book it as extra, physically-meaningless usage).
     """
     _patch_requests_cache()
     from quartz_solar_forecast.forecast import run_forecast
 
     site = _build_site(latitude, longitude, capacity_kwp)
     pred_df = run_forecast(site=site, ts=ts, nwp_source=nwp_source, model="gb")
+    pred_df["power_kw"] = pred_df["power_kw"].clip(lower=0.0)
     return pred_df.iloc[:BLOCKS_PER_DAY]
 
 

@@ -6,3 +6,4 @@ streamlit.log
 out/
 grid_energy/out_*.png
 .venv/
+.DS_Store
