@@ -12,7 +12,7 @@ A future integration would look like:
 
     component = GridEnergyComponent()                       # Oloika defaults, see config.py
     day = sim.run.simulate_day(population, price, scenario, rng)
-    result = component.compute_soc_for_usage(day.demand_kw, usage_block_minutes=sim.run.BLOCK_MINUTES)
+    result = component.compute_soc_for_usage(day.demand_kw, usage_block_minutes=sim.config.STATE.block_minutes)
     # result.socs_pct / result.actual_soc_pct / result.surplus_kwh / result.deficit_kwh
     # are now real-PV-forecast-driven, at grid_energy's native 15-min resolution.
 
@@ -38,6 +38,13 @@ class GridEnergyComponent:
     capacity_kwh: float | None = None       # battery, defaults to config.BATTERY.capacity_kwh
     soc_init_pct: float | None = None       # defaults to config.BATTERY.soc_init_pct
     nwp_source: str = "icon"
+
+    def forecast_pv_day(self, start=None) -> quartz_forecast.ForecastResult:
+        """Real PV(t) for 1 day at quartz_forecast's native 15-minute resolution -- 1 HTTP request
+        instead of forecast_pv_week's 7, a fast default for a UI that fetches automatically."""
+        return quartz_forecast.forecast_one_day_kw(
+            latitude=self.latitude, longitude=self.longitude, capacity_kwp=self.capacity_kwp,
+            start=start, nwp_source=self.nwp_source)
 
     def forecast_pv_week(self, start=None) -> quartz_forecast.ForecastResult:
         """Real PV(t) for 7 days at quartz_forecast's native 15-minute resolution."""

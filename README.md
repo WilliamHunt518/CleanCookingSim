@@ -28,9 +28,11 @@ python generate_model_pdf.py   # writes model_reference.pdf -- equations + every
 ## Interactive dashboard (`app.py`)
 
 `streamlit run app.py` opens a local browser dashboard as a single scrolling
-page (no sidebar, no tabs) with a sticky nav -- Map, Live model, Field data,
-Constraints, Menu, Scale, Parameters, Explainability -- following the same
-layout as the project's showcase page:
+page (no sidebar, no tabs) with a sticky nav -- Map, Live model, Grid &
+battery, Constraints, Menu, Scale, Parameters, Explainability, Field data --
+following the same layout as the project's showcase page (Field data is last
+deliberately: it's real-world ground-truth context, not something to act on
+before the model sections above it):
 
 - **Live model** -- the one dark section, holding everything that used to
   live in a sidebar plus the old Simulation/Plots tabs: *run configuration*
@@ -44,6 +46,15 @@ layout as the project's showcase page:
   cooking share, peakiness, meal timing, cooking-events/meal-type-over-time,
   utility waterfall) -- all rebuilt live from the current results, not
   cached PNGs.
+- **Grid & battery** -- see "Grid & battery" below. Auto-fetches a real PV
+  forecast (a live weather API call) the moment the section renders, no
+  button needed -- 1 day by default (1 HTTP request) since it re-fetches on
+  every parameter change; a **Show full week** button switches to a 7-day
+  forecast (7 requests) when you want the longer view, with **Back to 1
+  day** to switch back. Pick any swept tariff to see its demand pushed
+  through the battery model: a fitness scorecard, a PV-vs-usage and
+  battery-%-over-time chart, and a one-click table scoring every swept
+  tariff against that same forecast.
 - **Parameters** -- where you actually craft a persona: household/school/
   kiosk `gamma` offsets, `gamma_cost`, `kappa_price_time`, `sigma_ind`,
   school/kiosk `lam` overrides, `DELTA`, tariff levels, population size/mix.
@@ -56,8 +67,14 @@ layout as the project's showcase page:
   (pick a persona/hour/price/hunger state and see every term substituted
   with real numbers, down to `taste x gamma_taste = ...` for each meal), a
   live PRISM-export demo (build the formal-verification DTMC for a chosen
-  persona in-browser and see its actual reachable-state count), and a
-  walkthrough of how one block's decision becomes the scoreboard.
+  persona in-browser and see its actual reachable-state count, download the
+  `.pm`/`.props` files to run in real PRISM), a **cross-check** that actually
+  runs the validation the export exists for -- `prism_export.
+  compute_exact_properties` solves the same chain exactly in Python (the
+  linear algebra PRISM itself would do) and `monte_carlo_comparison` runs the
+  real 5-minute-block simulator under the export's own simplifications, so
+  you see both numbers side by side, not just a claim that they'd agree --
+  and a walkthrough of how one block's decision becomes the scoreboard.
 
 If the live config (however it was last changed) no longer matches the
 config used for the last **Run simulation**, a warning banner appears in the
@@ -142,14 +159,15 @@ Two further additions, orthogonal to the price mechanics above:
   agent its own small, fixed personal offset to each stage's bump centre
   (sampled once, like gamma -- some people habitually eat a bit
   earlier/later every day); `sigma_logit_noise` adds fresh per-block
-  idiosyncratic noise on top (today's whim). Together they widen the std dev
-  of lunch cook-start times from ~0.9h to ~1.1-1.3h and cut the tallest
-  half-hour bin on the cooking-events-over-time chart by ~15-20%, while
-  keeping meals/day within ~5% of the old, noise-free baseline.
-  `repeat_meal_prob` adds a third, much smaller kind of irregularity: a tiny
-  independent per-block chance that an already-eaten stage fires again
-  anyway (a second helping / snack) -- the odd bit of messiness a hard
-  one-meal-per-stage rule can otherwise never produce.
+  idiosyncratic noise on top (today's whim). Initially tuned to 1.8h/1.3,
+  then dialled back ~30% (to the current 1.26h/0.91) on feedback that the
+  resulting spread was a little more than wanted -- still well above the old
+  noise-free baseline, just not as wide. `repeat_meal_prob` adds a third,
+  much smaller kind of irregularity: a tiny independent per-block chance
+  that an already-eaten stage fires again anyway (a second helping / snack)
+  -- the odd bit of messiness a hard one-meal-per-stage rule can otherwise
+  never produce; also dialled back ~30% (0.0006 -> 0.00042) alongside the
+  other two.
 - **`meals_per_cook`** -- a school or kiosk *agent* is still one firing
   decision, but represents an institutional kitchen, not one household: a
   school "cooking lunch" is really a canteen serving many students at once.
@@ -179,6 +197,56 @@ on the other:
   sharp spike). Lower peak_kw / higher load_factor is better.
 
 The scoreboard sorts by `clean_cooking_share` descending.
+
+## Grid & battery (`grid_energy/`, `sim/grid.py`)
+
+`sim.score`'s metrics above are entirely about *agent behaviour* (what gets
+cooked, when) -- they say nothing about whether the mini-grid can actually
+deliver it. `grid_energy/` (see its own `README.md`/`COMPONENT_API.md`) is a
+separate, self-contained model of that: a real PV forecast
+(`quartz-solar-forecast`, live weather via Open-Meteo) plus a battery
+state-of-charge integration, anchored to Oloika (25 kWp PV / 54 kWh battery
+today, see `app.py`'s map) but scaled by `PV_max_kwp * 25/54` rather than the
+site's real 54/25 kWh/kWp ratio -- Oloika's actual battery is bigger than the
+site needs, so `grid_energy/config.py` deliberately doesn't replicate that
+oversizing by default. It imports nothing from `sim`; `sim/grid.py` is the
+one place `sim` reaches into it (`grid_energy`'s documented intended
+direction is `sim -> grid_energy`, never the reverse).
+
+```python
+from sim.grid import evaluate_tariff
+
+fitness, result = evaluate_tariff("evening_peak", R=20)
+fitness.fitness              # single scalar, higher is better -- for a later ML search
+fitness.battery_preserved    # min(actual battery %) over the forecast week, in [0, 1]
+fitness.demand_met           # 1 - (unmet demand / total demand) over the week, in [0, 1]
+fitness.soc                  # the full week-long grid_energy.soc.SOCResult trace
+```
+
+`evaluate_tariff` is the exposed API: give it a tariff name, get back a
+`GridFitnessResult` (`sim/grid.py`) built by running that tariff's own Monte
+Carlo sweep, averaging its demand_kw across runs into one representative day,
+tiling that across a real forecast week (`grid_energy.resample`), and
+scoring the resulting battery trace. `fitness = battery_weight *
+battery_preserved + demand_weight * demand_met` (both default to 0.5, both
+exposed as kwargs) -- deliberately simple and interpretable rather than a
+black box, since the point is to give a later ML search over tariff
+*parameters* something cheap to optimise against. `surplus_kwh` (PV beyond
+what a full battery could store) is tracked but not penalised in fitness --
+see `grid_energy/README.md` on why that's not necessarily waste.
+
+`run_grid_for_tariff_result` is the lower-level counterpart for a
+`TariffRunResult` you've already computed (what `app.py`'s "Grid & battery"
+section uses, so it doesn't re-run the sweep just to change the fitness
+weights or PV forecast). Both accept a pre-fetched `forecast=` so scoring
+several tariffs against the same PV week only fetches it once.
+
+Fetching a live forecast needs `quartz-solar-forecast` installed (`pip
+install quartz-solar-forecast`, Python <=3.11 -- see `grid_energy/README.md`
+for an install-time dependency gotcha it works around automatically) and
+internet access; `sim/grid.py` and its tests never require this (they use a
+manually-constructed `ForecastResult`, the same injection pattern
+`grid_energy/tests/` uses).
 
 ## Ablation tuning workflow
 
@@ -233,11 +301,14 @@ sim/agent.py       pure functions: fire (hazard), which (softmax choice), update
 sim/population.py  personas (household/school/kiosk), individual sampling
 sim/run.py         day loop, Monte Carlo sweep, demand assembly
 sim/score.py       clean_cooking_share, peak_kw, load_factor, scoreboard
+sim/grid.py        sim -> grid_energy: tariff demand -> PV/battery fitness, evaluate_tariff API
 sim/plots.py       the seven output figures
 sim/cli.py         explain / audit / run subcommands
-prism_export.py    stretch goal: exports one persona as a PRISM .pm/.props model
+prism_export.py    exports one persona as a PRISM .pm/.props model, and validates it against
+                   sim.run (compute_exact_properties vs. monte_carlo_comparison)
+grid_energy/       real PV forecast + battery SOC model, standalone (see its own README.md)
 tests/             pytest -- softmax direction, hunger dynamics, stage windows,
-                   energy conservation, tariff normalisation, reproducibility
+                   energy conservation, tariff normalisation, reproducibility, grid fitness
 ```
 
 ## What this deliberately does not model

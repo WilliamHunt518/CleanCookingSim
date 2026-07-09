@@ -56,6 +56,15 @@ def test_forecast_pv_week_passes_through_site_overrides():
         latitude=1.0, longitude=2.0, capacity_kwp=99.0, start="2026-01-01", nwp_source="gfs")
 
 
+def test_forecast_pv_day_passes_through_site_overrides():
+    component = GridEnergyComponent(latitude=1.0, longitude=2.0, capacity_kwp=99.0, nwp_source="gfs")
+    with patch("grid_energy.component.quartz_forecast.forecast_one_day_kw") as mock_forecast:
+        component.forecast_pv_day(start="2026-01-01")
+
+    mock_forecast.assert_called_once_with(
+        latitude=1.0, longitude=2.0, capacity_kwp=99.0, start="2026-01-01", nwp_source="gfs")
+
+
 def test_compute_soc_for_usage_passes_through_battery_overrides():
     """capacity_kwh / soc_init_pct set on the component must reach soc.compute_soc unchanged --
     this is what lets a caller size the battery per-scenario instead of only via config.py."""

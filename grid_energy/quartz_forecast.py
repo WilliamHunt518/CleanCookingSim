@@ -110,13 +110,31 @@ def forecast_day_kw(latitude: float | None, longitude: float | None, capacity_kw
     return pred_df.iloc[:BLOCKS_PER_DAY]
 
 
+def _default_start(start: datetime | pd.Timestamp | str | None) -> pd.Timestamp:
+    return pd.Timestamp.utcnow().tz_localize(None).normalize() if start is None else pd.Timestamp(start)
+
+
+def forecast_one_day_kw(latitude: float | None = None, longitude: float | None = None,
+                         capacity_kwp: float | None = None, start: datetime | pd.Timestamp | None = None,
+                         nwp_source: str = "icon") -> ForecastResult:
+    """PV(t) forecast for exactly 1 day at 15-minute resolution (96 blocks) -- a single
+    forecast_day_kw call, 1 HTTP request instead of forecast_week_kw's 7. The fast default: a UI
+    that auto-fetches on every load should reach for this first, and only pay for a full week
+    (forecast_week_kw) when a caller explicitly asks to see more than one day."""
+    start = _default_start(start)
+    day_df = forecast_day_kw(latitude, longitude, capacity_kwp, start, nwp_source=nwp_source)
+    power_kw = day_df["power_kw"]
+    energy_wh = power_kw * 1000.0 * (BLOCK_MINUTES / 60.0)
+    return ForecastResult(power_kw=power_kw, energy_wh=energy_wh)
+
+
 def forecast_week_kw(latitude: float | None = None, longitude: float | None = None,
                       capacity_kwp: float | None = None, start: datetime | pd.Timestamp | None = None,
                       nwp_source: str = "icon") -> ForecastResult:
     """PV(t) forecast for 7 days at 15-minute resolution (672 blocks), built from
     7 daily-anchored calls to quartz-solar-forecast's run_forecast (see module docstring
     for why one call can't cover a week directly)."""
-    start = pd.Timestamp.utcnow().tz_localize(None).normalize() if start is None else pd.Timestamp(start)
+    start = _default_start(start)
 
     days = [forecast_day_kw(latitude, longitude, capacity_kwp, start + pd.Timedelta(days=d),
                              nwp_source=nwp_source) for d in range(7)]

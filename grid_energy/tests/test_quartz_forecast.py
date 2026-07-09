@@ -40,6 +40,21 @@ def test_energy_wh_matches_power_times_quarter_hour():
     assert result.total_energy_wh == 7 * quartz_forecast.BLOCKS_PER_DAY * 1000.0
 
 
+def test_forecast_one_day_kw_makes_a_single_call():
+    calls = []
+
+    def fake_forecast_day_kw(latitude, longitude, capacity_kwp, ts, nwp_source="icon"):
+        calls.append(ts)
+        return _fake_day(ts, power_kw=8.0)
+
+    with patch.object(quartz_forecast, "forecast_day_kw", side_effect=fake_forecast_day_kw):
+        result = quartz_forecast.forecast_one_day_kw(start="2026-01-01")
+
+    assert len(calls) == 1  # the whole point -- 1 HTTP request, not forecast_week_kw's 7
+    assert len(result.power_kw) == quartz_forecast.BLOCKS_PER_DAY
+    assert result.peak_power_kw == 8.0
+
+
 def test_forecast_day_builds_a_fresh_site_every_call():
     """Regression test: quartz_solar_forecast.forecast.predict_ocf mutates a PVSite's
     capacity_kwp to 4 in place for capacity_kwp > 4 (see forecast_day_kw's docstring).

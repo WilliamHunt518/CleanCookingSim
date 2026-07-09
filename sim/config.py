@@ -121,7 +121,7 @@ TIMING = TimingConfig(
                      "Gaussian width (std dev) of each meal-time hazard bump.",
                      "Wider = firing probability spread over a longer window around the peak.",
                      tbd=True),
-    sigma_bump_center_jitter=p("timing", "sigma_bump_center_jitter", 1.8, "hours (std dev)",
+    sigma_bump_center_jitter=p("timing", "sigma_bump_center_jitter", 1.26, "hours (std dev)",
                                 "Every agent gets its own small, fixed-for-the-simulation personal "
                                 "offset to each stage's bump centre (jitter ~ Normal(0, "
                                 "sigma_bump_center_jitter), sampled once per agent at population-build "
@@ -135,10 +135,10 @@ TIMING = TimingConfig(
                                 "block-to-block idiosyncrasy (today's whim) -- both contribute to a "
                                 "softer, wider, more realistic aggregate curve, but this one is what "
                                 "actually widens the peak shape; noise mostly perturbs its edges. "
-                                "Empirically tuned alongside sigma_logit_noise: 1.8h widens the std dev "
-                                "of lunch cook-start times from ~0.9h to ~1.1-1.3h and cuts the "
-                                "aggregate cook-events-over-time chart's tallest half-hour bin by "
-                                "~15-20%, while keeping meals/day within ~5% of the jitter=0 baseline "
+                                "Empirically tuned alongside sigma_logit_noise at 1.8h, then dialled "
+                                "back ~30% to 1.26h on user feedback that the resulting spread was a "
+                                "little more than wanted -- still well above the old jitter=0 baseline, "
+                                "just not as wide. "
                                 "(too much jitter shifts an agent's effective bump centre so far it "
                                 "starts losing the argmax contest to a neighbouring stage before it ever "
                                 "fires -- see sim.agent.stage_bump_per_agent -- which costs them that "
@@ -186,7 +186,7 @@ TIMING = TimingConfig(
                         "Higher = tariffs visibly reshape *when* the population cooks, not just what they "
                         "cook; too high and expensive-hour agents mostly stop firing rather than shifting.",
                         tbd=True),
-    sigma_logit_noise=p("timing", "sigma_logit_noise", 1.3, "logit (std dev)",
+    sigma_logit_noise=p("timing", "sigma_logit_noise", 0.91, "logit (std dev)",
                          "Per-agent, per-block idiosyncratic noise added to the Stage 1 firing-hazard "
                          "logit: noise ~ Normal(0, sigma_logit_noise), redrawn fresh every block for "
                          "every agent. Without it, every agent's hazard at a given hour is identical "
@@ -199,12 +199,14 @@ TIMING = TimingConfig(
                          "Empirically tuned alongside sigma_bump_center_jitter, which does more of the "
                          "actual peak-widening work -- this mostly perturbs which exact block within an "
                          "already-open window an agent fires on, rather than shifting when their whole "
-                         "personal hazard curve is centred.",
+                         "personal hazard curve is centred. Dialled back ~30% from an initial 1.3 to "
+                         "0.91 alongside sigma_bump_center_jitter's rollback, same reasoning (see that "
+                         "parameter).",
                          "Higher = softer, noisier peaks; 0 = the old perfectly synchronised behaviour. "
                          "Can't by itself reopen an already-eaten stage -- for that, see "
                          "repeat_meal_prob.",
                          tbd=True),
-    repeat_meal_prob=p("timing", "repeat_meal_prob", 0.0006, "probability/block",
+    repeat_meal_prob=p("timing", "repeat_meal_prob", 0.00042, "probability/block",
                         "Small per-block chance that an agent fires *again* in a stage it has already "
                         "eaten this stage today (a second helping / snack / someone popping back for "
                         "more) -- eligibility is normally locked to exactly one meal per stage per day "
@@ -214,8 +216,9 @@ TIMING = TimingConfig(
                         "eating, not need-driven, so it doesn't reduce hunger accounting (h's nonzero "
                         "count, and therefore n_eaten, is unaffected by a repeat overwriting h[stage]). "
                         "At ~70 blocks over which a stage's bump is typically the argmax winner, "
-                        "0.0006/block is roughly a 4% chance of a repeat somewhere in that stretch per "
-                        "agent per stage.",
+                        "0.00042/block is roughly a 3% chance of a repeat somewhere in that stretch per "
+                        "agent per stage -- dialled back ~30% from an initial 0.0006 (~4%) alongside "
+                        "the other two realism-noise parameters' rollback, same reasoning.",
                         "Higher = more visible 'double meal' outliers in the event log and a less "
                         "perfectly regular 1-meal-per-stage pattern; 0 = the old hard-gated behaviour.",
                         tbd=True),

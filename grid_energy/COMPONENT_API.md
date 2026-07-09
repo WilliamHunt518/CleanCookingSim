@@ -95,8 +95,8 @@ component = GridEnergyComponent(capacity_kwp=50.0, capacity_kwh=100.0)
 |---|---|---|---|
 | `latitude` | `float \| None` | `None` -> `config.SITE.latitude` (`-0.80895`) | Site latitude, decimal degrees. Passed straight to `quartz-solar-forecast`'s `PVSite.latitude` (valid range `[-90, 90]`, enforced by that library, not by `grid_energy`). |
 | `longitude` | `float \| None` | `None` -> `config.SITE.longitude` (`36.24232`) | Site longitude, decimal degrees. Valid range `[-180, 180]`. |
-| `capacity_kwp` | `float \| None` | `None` -> `config.PV.rated_kwp` (`120.0`) | Nameplate PV array capacity, kilowatts-peak. The underlying forecast model is only trained up to 4 kWp; `quartz-solar-forecast` internally runs at 4 kWp and rescales the output linearly by `capacity_kwp / 4` when `capacity_kwp > 4` (this is handled correctly per-call by `grid_energy`, see "Known upstream gotchas" below -- you do not need to do anything about it). |
-| `capacity_kwh` | `float \| None` | `None` -> `config.BATTERY.capacity_kwh` (`30.0`) | Battery capacity `BC`, kilowatt-hours. This is the `BC` in the `socs` equation, and is only used by `compute_soc_for_usage` (has no effect on `forecast_pv_week`). |
+| `capacity_kwp` | `float \| None` | `None` -> `config.PV.rated_kwp` (`60.0`) | Nameplate PV array capacity, kilowatts-peak. The underlying forecast model is only trained up to 4 kWp; `quartz-solar-forecast` internally runs at 4 kWp and rescales the output linearly by `capacity_kwp / 4` when `capacity_kwp > 4` (this is handled correctly per-call by `grid_energy`, see "Known upstream gotchas" below -- you do not need to do anything about it). |
+| `capacity_kwh` | `float \| None` | `None` -> `config.BATTERY.capacity_kwh` (`~27.8`, `= config.PV.PV_max_kwp * 25/54`) | Battery capacity `BC`, kilowatt-hours. This is the `BC` in the `socs` equation, and is only used by `compute_soc_for_usage` (has no effect on `forecast_pv_week`). Deliberately *smaller* than a naive 54/25 (Oloika's real kWh/kWp) scaling would give -- Oloika's actual battery bank is oversized relative to what this site needs, so scaling proportionally to the *inverse* ratio keeps a bigger PV array from getting an equally oversized battery by default. |
 | `soc_init_pct` | `float \| None` | `None` -> `config.BATTERY.soc_init_pct` (`0.0`) | Starting battery charge, percent of `capacity_kwh`, at `t=0` of the run (i.e. the first block of the returned series only -- see `soc_init_pct` semantics under `compute_soc` below for how this interacts with daily resets). |
 | `nwp_source` | `str` | `"icon"` | Which numerical-weather-prediction dataset `quartz-solar-forecast` pulls from Open-Meteo. One of `"icon"`, `"gfs"`, `"ukmo"`, `"ecmwf"`. `"icon"` is the library's own default and is what `grid_energy` also defaults to. Only affects `forecast_pv_week`/PV data, never `usage_kw`. |
 
@@ -338,10 +338,11 @@ SITE = SiteConfig(
     tilt_deg=15.0, orientation_deg=180.0,     # panel tilt/azimuth, passed to quartz-solar-forecast
 )
 PV = PVConfig(
-    rated_kwp=120.0,                          # nameplate PV array capacity, kWp
+    rated_kwp=60.0,                           # nameplate PV array capacity, kWp (= PV_max_kwp)
 )
 BATTERY = BatteryConfig(
-    capacity_kwh=30.0,                        # BC, kWh
+    capacity_kwh=27.8,                        # BC, kWh (= PV_max_kwp * 25/54, deliberately smaller
+                                                # than Oloika's real, oversized 54/25 kWh/kWp ratio)
     soc_init_pct=0.0,                         # starting charge, % of BC, at t=0 only
 )
 TIME = TimeConfig(

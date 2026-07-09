@@ -6,8 +6,10 @@ Launch with:  streamlit run app.py
 
 Layout follows the colleague's oloika-showcase-v2.html showcase page: one
 long scroll with a sticky top nav (no sidebar, no tabs) -- Map, Live model,
-Field data, Constraints, Menu, Scale, Parameters, Explainability, in that
-order. "Live model" is the one dark section (mirrors the showcase's #live)
+Grid & battery, Constraints, Menu, Scale, Parameters, Explainability, Field
+data, in that order (Field data last -- real-world ground-truth context, not
+something to act on before the model sections above it). "Live model" is the
+one dark section (mirrors the showcase's #live)
 and holds everything the sidebar used to: run configuration (scenario,
 which tariffs to sweep, R, seed, ablation switches, the Run button -- cheap
 execution settings that apply immediately), live run progress, the
@@ -34,7 +36,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import prism_export
-from sim import agent, config, meals, plots, run as run_mod, score, tariffs as tariffs_mod
+from grid_energy import GridEnergyComponent
+from grid_energy import config as grid_config
+from sim import agent, config, grid as grid_mod, meals, plots, run as run_mod, score, tariffs as tariffs_mod
 from sim import population as population_mod
 import theme
 
@@ -503,62 +507,135 @@ with st.container(key="live_panel"):
 st.markdown(theme.beads(), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Field data: real pilot measurements (not simulator output)
+# Grid & battery: push a tariff's simulated demand through the real PV
+# forecast + battery SOC model (grid_energy/), and score the fit.
 # ---------------------------------------------------------------------------
-theme.anchor("evidence")
-st.markdown(theme.kanga("What Oloika measured", theme.BLUE) + "  \n### Field data &middot; Aug '24 - Jul '25",
+theme.anchor("grid")
+st.markdown(theme.kanga("Sun, storage, and cooking", theme.YELLOW) + "  \n### Grid &amp; battery",
             unsafe_allow_html=True)
-st.caption("Real pilot measurements from the deployed mini-grid -- not simulator output. "
-           "Source: Univ. of Southampton & Kenya Power (MECS/FCDO, Oct 2025).")
-st.markdown(
-    '<div class="stat-row">'
-    + theme.stat_tile("32&rarr;57", "kWh/day village load", "r")
-    + theme.stat_tile("1.7", "kWh/day e-cooking (12.5 predicted)", "b")
-    + theme.stat_tile("4.2 kW", "max combined cooker load", "y")
-    + theme.stat_tile("KES 30/40", "green vs standard tariff", "g")
-    + '</div>', unsafe_allow_html=True)
-ev1, ev2 = st.columns(2)
-with ev1:
-    st.markdown(
-        '<div class="oloika-card"><p style="font-family:var(--disp);text-transform:uppercase;'
-        'font-size:.9rem;margin:0 0 .4rem">Monthly consumption (kWh)</p>'
-        '<svg viewBox="0 0 760 290" role="img" aria-label="Monthly consumption growing from 1070 to 1764 kilowatt hours">'
-        '<line x1="10" y1="240" x2="750" y2="240" stroke="#181310" stroke-width="3"/>'
-        '<rect x="190" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>'
-        '<rect x="370" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>'
-        '<g fill="#1F5FA8">'
-        '<rect x="12" y="109" width="40" height="131"/><rect x="72" y="112" width="40" height="128"/>'
-        '<rect x="132" y="85" width="40" height="155"/><rect x="192" y="126" width="40" height="114" fill="#7fa3cd"/>'
-        '<rect x="252" y="146" width="40" height="94" fill="#7fa3cd"/><rect x="312" y="92" width="40" height="148"/>'
-        '<rect x="372" y="99" width="40" height="141" fill="#7fa3cd"/><rect x="432" y="118" width="40" height="122" fill="#7fa3cd"/>'
-        '<rect x="492" y="87" width="40" height="153"/><rect x="552" y="58" width="40" height="182"/>'
-        '<rect x="612" y="42" width="40" height="198"/><rect x="672" y="24" width="40" height="216"/>'
-        '</g>'
-        '<line x1="14" y1="118" x2="710" y2="32" stroke="#C22A1E" stroke-width="3" stroke-dasharray="8 6"/>'
-        '<g font-size="9" fill="#181310" text-anchor="middle">'
-        '<text x="32" y="258">A\'24</text><text x="92" y="258">S</text><text x="152" y="258">O</text>'
-        '<text x="212" y="258">N</text><text x="272" y="258">D</text><text x="332" y="258">J\'25</text>'
-        '<text x="392" y="258">F</text><text x="452" y="258">M</text><text x="512" y="258">A</text>'
-        '<text x="572" y="258">M</text><text x="632" y="258">J</text><text x="692" y="258">J</text>'
-        '</g></svg></div>', unsafe_allow_html=True)
-with ev2:
-    st.markdown(
-        '<div class="oloika-card">'
-        '<p style="font-family:var(--disp);text-transform:uppercase;font-size:.9rem;margin:0 0 .4rem">'
-        "57% of e-cooking in Green Light Hours</p>"
-        '<svg viewBox="0 0 380 120" role="img" aria-label="57 percent daytime cooking versus 43 percent other hours">'
-        '<rect x="16" y="30" width="348" height="56" fill="#EFE3CE" stroke="#181310" stroke-width="3"/>'
-        '<rect x="16" y="30" width="198" height="56" fill="#2E7D4F"/>'
-        '<text x="30" y="64" font-size="18" fill="#fff" font-weight="bold">57% daylight</text>'
-        '<text x="226" y="64" font-size="13">43% other</text></svg>'
-        '<p style="font-family:var(--disp);text-transform:uppercase;font-size:.9rem;margin:1rem 0 .4rem">Financing recovery</p>'
-        '<svg viewBox="0 0 380 96" role="img" aria-label="23 percent of the 95000 shilling investment repaid so far, full 112100 anticipated">'
-        '<rect x="16" y="14" width="348" height="26" fill="#EFE3CE" stroke="#181310" stroke-width="2.5"/>'
-        '<rect x="16" y="14" width="80" height="26" fill="#2E7D4F"/>'
-        '<text x="104" y="32" font-size="11" font-weight="bold">KES 18,400 repaid &middot; 23% of 95,000</text>'
-        '<rect x="16" y="52" width="348" height="26" fill="#F2B01E" stroke="#181310" stroke-width="2.5"/>'
-        '<text x="24" y="70" font-size="11" font-weight="bold">KES 112,100 full repayment on track (Magadi Sacco)</text>'
-        '</svg></div>', unsafe_allow_html=True)
+st.caption("sim (above) only ever asks 'how much does the village want to cook, and when' -- it has "
+           "no idea whether the mini-grid can actually deliver that. This section pushes a tariff's "
+           "simulated demand_kw through grid_energy's real PV forecast + battery model "
+           "(grid_energy/README.md) to check: does this tariff's demand pattern actually fit within "
+           "what Oloika can generate and store, not just how it scores on clean cooking / peakiness "
+           "above? fitness below is a single number meant for a later ML search over tariff "
+           "parameters -- higher is better, and it's built from the two things the model tracks: "
+           "whether the battery stayed usable, and whether demand was actually met. The PV forecast "
+           "auto-fetches below (a live weather API call) -- 1 day by default, since that's 7x fewer "
+           "HTTP requests than a week and this section reloads it on every parameter change.")
+
+with st.expander("Grid model parameters (Oloika defaults, all overridable)"):
+    gc1, gc2, gc3 = st.columns(3)
+    with gc1:
+        grid_capacity_kwp = st.number_input("PV array (kWp)", value=float(grid_config.PV.rated_kwp), min_value=1.0)
+    with gc2:
+        grid_capacity_kwh = st.number_input("Battery capacity (kWh)",
+                                             value=float(grid_config.BATTERY.capacity_kwh), min_value=1.0)
+    with gc3:
+        grid_soc_init_pct = st.slider("Starting charge (%)", 0.0, 100.0,
+                                       float(grid_config.BATTERY.soc_init_pct))
+    battery_weight = st.slider("Fitness weight: battery preserved vs. demand met", 0.0, 1.0, 0.5, 0.05,
+                                help="0 = fitness is entirely 'was demand met', 1 = entirely 'did the "
+                                     "battery stay charged'. The two weights always sum to 1.")
+    demand_weight = 1.0 - battery_weight
+    st.caption(f"demand-met weight = 1 - battery weight = {demand_weight:.2f}.")
+
+horizon_col, _ = st.columns([1, 3])
+with horizon_col:
+    grid_horizon = st.session_state.get("grid_horizon", "day")
+    if grid_horizon == "day":
+        if st.button("Show full week (7-day forecast)"):
+            st.session_state["grid_horizon"] = "week"
+            st.rerun()
+    else:
+        if st.button("Back to 1 day"):
+            st.session_state["grid_horizon"] = "day"
+            st.rerun()
+grid_horizon = st.session_state.get("grid_horizon", "day")
+
+desired_forecast_params = (grid_horizon, grid_capacity_kwp)
+if st.session_state.get("grid_forecast_params") != desired_forecast_params:
+    fetch_component = GridEnergyComponent(capacity_kwp=grid_capacity_kwp)
+    n_calls = "7 HTTP calls" if grid_horizon == "week" else "1 HTTP call"
+    try:
+        with st.spinner(f"Auto-fetching a real PV forecast from Open-Meteo ({n_calls})..."):
+            forecast = (fetch_component.forecast_pv_week() if grid_horizon == "week"
+                        else fetch_component.forecast_pv_day())
+        st.session_state["grid_forecast"] = forecast
+        st.session_state["grid_forecast_params"] = desired_forecast_params
+    except ModuleNotFoundError:
+        st.error("quartz-solar-forecast isn't installed, so a live PV forecast can't be fetched. Run "
+                 "`pip install quartz-solar-forecast` (needs Python <=3.11 -- see grid_energy/README.md "
+                 "for an install-time dependency gotcha it works around automatically) and reload.")
+        st.session_state.pop("grid_forecast", None)
+    except Exception as e:
+        st.error(f"PV forecast fetch failed ({type(e).__name__}: {e}). This calls a live weather API "
+                 "and needs internet access -- check your connection and reload.")
+        st.session_state.pop("grid_forecast", None)
+
+if "grid_forecast" not in st.session_state:
+    st.info("Nothing to show until the PV forecast above fetches successfully.")
+else:
+    grid_forecast = st.session_state["grid_forecast"]
+    fc = grid_forecast
+    st.caption(f"{len(fc.power_kw)} x 15-min blocks, peak {fc.peak_power_kw:.1f} kW, "
+               f"{fc.total_energy_wh / 1000:,.1f} kWh over the {grid_horizon}.")
+    grid_component = GridEnergyComponent(capacity_kwp=grid_capacity_kwp, capacity_kwh=grid_capacity_kwh,
+                                          soc_init_pct=grid_soc_init_pct)
+
+    tariff_for_grid = st.selectbox("Tariff", list(results.keys()), key="grid_tariff_select")
+    fitness = grid_mod.run_grid_for_tariff_result(results[tariff_for_grid], component=grid_component,
+                                                    forecast=grid_forecast, battery_weight=battery_weight,
+                                                    demand_weight=demand_weight)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Fitness", f"{fitness.fitness:.2f}")
+    m2.metric("Battery preserved", f"{fitness.battery_preserved:.2f}",
+              help=f"min(actual_soc_pct)/100 over the {grid_horizon} -- 1.0 = the real battery never "
+                   "got close to empty.")
+    m3.metric("Demand met", f"{fitness.demand_met:.2f}",
+              help=f"1 - (total unmet demand / total demand) over the {grid_horizon}.")
+    m4.metric("Min battery charge", f"{fitness.min_actual_soc_pct:.0f}%")
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    ax1.plot(fitness.soc.t_hr, fitness.soc.pv_kw, label="PV (kW)", color="tab:orange")
+    ax1.plot(fitness.soc.t_hr, fitness.soc.usage_kw, label="Usage (kW)", color="tab:blue")
+    ax1.set_ylabel("kW")
+    ax1.set_title(f"{tariff_for_grid}: PV vs. simulated usage over the forecast {grid_horizon}")
+    ax1.legend()
+    ax2.plot(fitness.soc.t_hr, fitness.soc.actual_soc_pct, label="actual (real battery, [0,100])",
+             color="tab:green")
+    ax2.plot(fitness.soc.t_hr, fitness.soc.socs_pct, label="socs (unbounded, daily-reset)",
+             color="tab:gray", alpha=0.6)
+    ax2.axhline(0, color="black", lw=0.6)
+    ax2.axhline(100, color="black", lw=0.6)
+    ax2.set_ylabel("% of battery capacity")
+    ax2.set_xlabel(f"hour into forecast {grid_horizon}")
+    ax2.legend()
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.caption(f"Surplus over the {grid_horizon}: **{fitness.total_surplus_kwh:.1f} kWh** (PV beyond "
+               "what a full battery could store -- not penalised in fitness, see grid_energy's README: "
+               "it could power extra load directly instead of being wasted) &middot; deficit: "
+               f"**{fitness.total_deficit_kwh:.1f} kWh** (unmet demand once the battery was empty).")
+
+    st.markdown(f"###### Compare every swept tariff against this same PV {grid_horizon}",
+                unsafe_allow_html=True)
+    if st.button("Score every swept tariff"):
+        rows = []
+        for name, res in results.items():
+            f = grid_mod.run_grid_for_tariff_result(res, component=grid_component, forecast=grid_forecast,
+                                                       battery_weight=battery_weight,
+                                                       demand_weight=demand_weight)
+            rows.append({"tariff": name, "fitness": f.fitness, "battery_preserved": f.battery_preserved,
+                         "demand_met": f.demand_met, "min_battery_pct": f.min_actual_soc_pct,
+                         "deficit_kwh": f.total_deficit_kwh, "surplus_kwh": f.total_surplus_kwh})
+        st.session_state["grid_board"] = pd.DataFrame(rows).sort_values(
+            "fitness", ascending=False).reset_index(drop=True)
+    if "grid_board" in st.session_state:
+        st.dataframe(st.session_state["grid_board"], width="stretch", hide_index=True)
 
 st.markdown(theme.beads(), unsafe_allow_html=True)
 
@@ -1154,6 +1231,44 @@ if st.button(f"Build the PRISM chain for '{prism_persona}'", key="prism_build_bt
 else:
     st.caption("Not built yet -- press the button (builds once per persona per session, then cached).")
 
+st.markdown("#### Cross-check: does the exact chain agree with the real simulator?")
+st.markdown(
+    "This is the only place in the app that actually performs the validation the section above "
+    "describes -- everywhere else, PRISM is a **file format** this app writes "
+    "(`prism_export.write_pm`/`write_props`), not a computation it runs; the real external PRISM "
+    "tool, if you download the files above and run them, would give the same numbers as "
+    "`compute_exact_properties` below, since it's solving the identical chain. `sim.run` (the Live "
+    "model section) never reads anything from `prism_export.py` and vice versa -- they're two "
+    "independent implementations of the same equations, which is what makes comparing them a real "
+    "check rather than comparing code against itself.\n\n"
+    "`compute_exact_properties` forward-propagates the exact probability distribution over "
+    "`build_chain`'s states, one 30-minute block at a time -- the same linear algebra PRISM's own "
+    "model checker performs, just run here directly so no external PRISM install is needed to see "
+    "the numbers. `monte_carlo_comparison` runs the *real* simulator (`sim.run.simulate_day`, full "
+    "288 x 5-minute blocks) under this export's own simplifications (a population of identical, "
+    "noise-free copies of this persona's mean parameters; `sigma_logit_noise`/`repeat_meal_prob` "
+    "forced to 0 to match what the coarse chain omits) so the two are answering the same question."
+)
+mc_n_agents = st.slider("Monte Carlo agents", 50, 1000, 300, 50, key="prism_mc_agents")
+mc_R = st.slider("Monte Carlo days per agent", 5, 100, 30, 5, key="prism_mc_R")
+if st.button(f"Cross-check '{prism_persona}' (exact vs. Monte Carlo)", key="prism_crosscheck_btn"):
+    with st.spinner("Solving the exact chain and running the equivalent Monte Carlo sweep..."):
+        transitions, _all_states = _cached_prism_chain(prism_persona)
+        exact = prism_export.compute_exact_properties(transitions)
+        mc = prism_export.monte_carlo_comparison(prism_persona, n_agents=mc_n_agents, R=mc_R, seed=0)
+
+    cmp_df = pd.DataFrame({
+        "quantity": ["expected wood meals/day", "P(incomplete day)"],
+        "exact (PRISM chain)": [exact["expected_wood_meals"], exact["prob_incomplete_day"]],
+        f"Monte Carlo ({mc['n_agent_days']:,} agent-days)": [mc["expected_wood_meals"], mc["prob_incomplete_day"]],
+    })
+    cmp_df["difference"] = (cmp_df["exact (PRISM chain)"] - cmp_df[f"Monte Carlo ({mc['n_agent_days']:,} agent-days)"]).round(4)
+    st.dataframe(cmp_df, width="stretch", hide_index=True)
+    st.caption("Any remaining gap should be small and attributable only to what's genuinely still "
+               "different between the two: 5-minute blocks here vs. 30-minute blocks in the chain, "
+               "and a 24h tau cap here vs. 12h there -- not a modelling disagreement. A large gap "
+               "would mean the two implementations have actually diverged.")
+
 st.markdown(theme.beads(), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
@@ -1194,5 +1309,69 @@ st.markdown(
     "that panel, which is why it updates instantly without needing Run simulation. Treat it as an "
     "illustration of a typical day, not literally one of the runs the scoreboard averaged."
 )
+
+st.markdown(theme.beads(), unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Field data: real pilot measurements (not simulator output) -- kept last,
+# after everything the simulator itself produces, since it's ground-truth
+# context rather than something to act on before the model sections above.
+# ---------------------------------------------------------------------------
+theme.anchor("evidence")
+st.markdown(theme.kanga("What Oloika measured", theme.BLUE) + "  \n### Field data &middot; Aug '24 - Jul '25",
+            unsafe_allow_html=True)
+st.caption("Real pilot measurements from the deployed mini-grid -- not simulator output. "
+           "Source: Univ. of Southampton & Kenya Power (MECS/FCDO, Oct 2025).")
+st.markdown(
+    '<div class="stat-row">'
+    + theme.stat_tile("32&rarr;57", "kWh/day village load", "r")
+    + theme.stat_tile("1.7", "kWh/day e-cooking (12.5 predicted)", "b")
+    + theme.stat_tile("4.2 kW", "max combined cooker load", "y")
+    + theme.stat_tile("KES 30/40", "green vs standard tariff", "g")
+    + '</div>', unsafe_allow_html=True)
+ev1, ev2 = st.columns(2)
+with ev1:
+    st.markdown(
+        '<div class="oloika-card"><p style="font-family:var(--disp);text-transform:uppercase;'
+        'font-size:.9rem;margin:0 0 .4rem">Monthly consumption (kWh)</p>'
+        '<svg viewBox="0 0 760 290" role="img" aria-label="Monthly consumption growing from 1070 to 1764 kilowatt hours">'
+        '<line x1="10" y1="240" x2="750" y2="240" stroke="#181310" stroke-width="3"/>'
+        '<rect x="190" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>'
+        '<rect x="370" y="20" width="120" height="220" fill="#F2B01E" opacity=".22"/>'
+        '<g fill="#1F5FA8">'
+        '<rect x="12" y="109" width="40" height="131"/><rect x="72" y="112" width="40" height="128"/>'
+        '<rect x="132" y="85" width="40" height="155"/><rect x="192" y="126" width="40" height="114" fill="#7fa3cd"/>'
+        '<rect x="252" y="146" width="40" height="94" fill="#7fa3cd"/><rect x="312" y="92" width="40" height="148"/>'
+        '<rect x="372" y="99" width="40" height="141" fill="#7fa3cd"/><rect x="432" y="118" width="40" height="122" fill="#7fa3cd"/>'
+        '<rect x="492" y="87" width="40" height="153"/><rect x="552" y="58" width="40" height="182"/>'
+        '<rect x="612" y="42" width="40" height="198"/><rect x="672" y="24" width="40" height="216"/>'
+        '</g>'
+        '<line x1="14" y1="118" x2="710" y2="32" stroke="#C22A1E" stroke-width="3" stroke-dasharray="8 6"/>'
+        '<g font-size="9" fill="#181310" text-anchor="middle">'
+        '<text x="32" y="258">A\'24</text><text x="92" y="258">S</text><text x="152" y="258">O</text>'
+        '<text x="212" y="258">N</text><text x="272" y="258">D</text><text x="332" y="258">J\'25</text>'
+        '<text x="392" y="258">F</text><text x="452" y="258">M</text><text x="512" y="258">A</text>'
+        '<text x="572" y="258">M</text><text x="632" y="258">J</text><text x="692" y="258">J</text>'
+        '</g></svg></div>', unsafe_allow_html=True)
+with ev2:
+    st.markdown(
+        '<div class="oloika-card">'
+        '<p style="font-family:var(--disp);text-transform:uppercase;font-size:.9rem;margin:0 0 .4rem">'
+        "57% of e-cooking in Green Light Hours</p>"
+        '<svg viewBox="0 0 380 120" role="img" aria-label="57 percent daytime cooking versus 43 percent other hours">'
+        '<rect x="16" y="30" width="348" height="56" fill="#EFE3CE" stroke="#181310" stroke-width="3"/>'
+        '<rect x="16" y="30" width="198" height="56" fill="#2E7D4F"/>'
+        '<text x="30" y="64" font-size="18" fill="#fff" font-weight="bold">57% daylight</text>'
+        '<text x="226" y="64" font-size="13">43% other</text></svg>'
+        '<p style="font-family:var(--disp);text-transform:uppercase;font-size:.9rem;margin:1rem 0 .4rem">Financing recovery</p>'
+        '<svg viewBox="0 0 380 96" role="img" aria-label="23 percent of the 95000 shilling investment repaid so far, full 112100 anticipated">'
+        '<rect x="16" y="14" width="348" height="26" fill="#EFE3CE" stroke="#181310" stroke-width="2.5"/>'
+        '<rect x="16" y="14" width="80" height="26" fill="#2E7D4F"/>'
+        '<text x="104" y="32" font-size="11" font-weight="bold">KES 18,400 repaid &middot; 23% of 95,000</text>'
+        '<rect x="16" y="52" width="348" height="26" fill="#F2B01E" stroke="#181310" stroke-width="2.5"/>'
+        '<text x="24" y="70" font-size="11" font-weight="bold">KES 112,100 full repayment on track (Magadi Sacco)</text>'
+        '</svg></div>', unsafe_allow_html=True)
+
+st.markdown(theme.beads(), unsafe_allow_html=True)
 
 theme.footer()
