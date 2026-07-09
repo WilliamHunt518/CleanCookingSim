@@ -99,6 +99,7 @@ class TimingConfig:
     sigma_logit_noise: float
     repeat_meal_prob: float
     stage_windows_hr: dict
+    DELTA_WOOD_FLOOR: float
 
 
 TIMING = TimingConfig(
@@ -237,6 +238,33 @@ TIMING = TimingConfig(
                         "Only affects the classifier's nominal reference points, not real "
                         "eligibility -- to actually narrow when meals fire, use bump_width_hr or "
                         "bump_centers_hr instead.",
+                        tbd=True),
+    DELTA_WOOD_FLOOR=p("timing", "DELTA_WOOD_FLOOR", 0.005, "probability/block (max)",
+                        "A second, price-IMMUNE firing-probability cap, evaluated with the same "
+                        "w(t)/eta_t/lam/hunger/noise terms as the main hazard but price_term forced "
+                        "to 0 -- 'even if grid electricity is unaffordable right now, this agent can "
+                        "still fall back to free firewood.' q_wood_floor = sigmoid(logit without "
+                        "price_term) * DELTA_WOOD_FLOOR; the two pathways combine as an independent "
+                        "union, q = 1 - (1-q_price_sensitive)*(1-q_wood_floor), not a simple max/sum. "
+                        "Deliberately much smaller than DELTA=0.15: under any realistic tariff "
+                        "(flat/evening_peak/solar_following), q_price_sensitive is already comparable "
+                        "to or bigger than a DELTA_WOOD_FLOOR-capped q_wood_floor, so the union barely "
+                        "moves and every existing tariff's calibrated price response (e.g. "
+                        "evening_peak's meals/day dropping from flat's ~2.8 to ~2.4) is preserved. It "
+                        "only matters when price_term crushes q_price_sensitive toward 0 "
+                        "(extreme_test's 5x p_bar, or any other absurd price), where it stops the "
+                        "model from the unrealistic 'nobody cooks anything, not even on free wood' "
+                        "collapse that a pure Stage 1 price gate produces -- Stage 2's softmax already "
+                        "correctly steers a fired agent toward wood under a high price (see "
+                        "test_raising_price_shifts_choice_toward_wood_away_from_big_ecook), so this "
+                        "floor only needed to fix Stage 1's firing probability, not Stage 2's choice. "
+                        "Empirically tuned: 0.005 leaves extreme_test at ~15% of flat's total cook "
+                        "events (still a heavy, deliberate deterrent -- an 85% collapse, not a wash) "
+                        "and ~98% of what residual cooking remains is wood, confirming the floor "
+                        "redirects to wood rather than just re-permitting electric cooking.",
+                        "Higher = agents cook via the free-wood fallback more often even under an "
+                        "extreme electricity price; 0 = the old behaviour where an absurd enough "
+                        "price suppresses cooking altogether, not just electric cooking.",
                         tbd=True),
 )
 

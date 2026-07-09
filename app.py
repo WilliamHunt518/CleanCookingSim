@@ -38,7 +38,8 @@ import streamlit.components.v1 as components
 import prism_export
 from grid_energy import GridEnergyComponent
 from grid_energy import config as grid_config
-from sim import agent, config, grid as grid_mod, meals, plots, run as run_mod, score, tariffs as tariffs_mod
+from sim import agent, config, ga as ga_mod, grid as grid_mod, meals, plots, run as run_mod, score
+from sim import tariffs as tariffs_mod
 from sim import population as population_mod
 import theme
 
@@ -344,11 +345,17 @@ with st.container(key="live_panel"):
     with c1:
         scenario_name = st.selectbox("Scenario", list(config.SCENARIOS.keys()))
     with c2:
-        _default_tariffs = [t for t in tariffs_mod.CANDIDATES if t != "extreme_test"]
+        _default_tariffs = [t for t in tariffs_mod.CANDIDATES
+                             if t != "extreme_test" and t not in tariffs_mod.FORECAST_DRIVEN_NAMES]
         tariff_names = st.multiselect(
             "Tariffs to sweep", list(tariffs_mod.CANDIDATES.keys()), default=_default_tariffs,
             help="extreme_test (5x p_bar, flat all day) is a sanity-check stress tariff, not a "
-                 "realistic candidate -- opt in to see the model's price response saturate.")
+                 "realistic candidate -- opt in to see the model's price response saturate. "
+                 "green_light/pv_following_real/soc_banded/residual_load/deficit_guard "
+                 "(TARIFF_STRATEGIES.md) need a live PV forecast (internet + quartz-solar-forecast "
+                 "installed) the first time any of them is swept in this session -- opt in "
+                 "deliberately rather than have every Run simulation silently depend on network "
+                 "access.")
     with c3:
         R = st.slider("Monte Carlo runs (R)", 5, 200, 20, 5,
                       help="Lower = faster iteration while tuning; raise for a stable final read.")
@@ -583,59 +590,173 @@ else:
     grid_component = GridEnergyComponent(capacity_kwp=grid_capacity_kwp, capacity_kwh=grid_capacity_kwh,
                                           soc_init_pct=grid_soc_init_pct)
 
-    tariff_for_grid = st.selectbox("Tariff", list(results.keys()), key="grid_tariff_select")
-    fitness = grid_mod.run_grid_for_tariff_result(results[tariff_for_grid], component=grid_component,
-                                                    forecast=grid_forecast, battery_weight=battery_weight,
-                                                    demand_weight=demand_weight)
+    tariffs_for_grid = st.multiselect("Tariffs to overlay", list(results.keys()),
+                                       default=list(results.keys()), key="grid_tariff_select")
+    if not tariffs_for_grid:
+        st.info("Select at least one tariff to overlay.")
+    else:
+        fitness_by_tariff = {
+            name: grid_mod.run_grid_for_tariff_result(results[name], component=grid_component,
+                                                        forecast=grid_forecast, battery_weight=battery_weight,
+                                                        demand_weight=demand_weight)
+            for name in tariffs_for_grid
+        }
+        colors = plt.get_cmap("tab10").colors
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Fitness", f"{fitness.fitness:.2f}")
-    m2.metric("Battery preserved", f"{fitness.battery_preserved:.2f}",
-              help=f"min(actual_soc_pct)/100 over the {grid_horizon} -- 1.0 = the real battery never "
-                   "got close to empty.")
-    m3.metric("Demand met", f"{fitness.demand_met:.2f}",
-              help=f"1 - (total unmet demand / total demand) over the {grid_horizon}.")
-    m4.metric("Min battery charge", f"{fitness.min_actual_soc_pct:.0f}%")
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+        first_fit = next(iter(fitness_by_tariff.values()))
+        ax1.plot(first_fit.soc.t_hr, first_fit.soc.pv_kw, label="PV (kW)", color="black", linewidth=2)
+        for i, (name, fit) in enumerate(fitness_by_tariff.items()):
+            ax1.plot(fit.soc.t_hr, fit.soc.usage_kw, label=f"{name} usage", color=colors[i % len(colors)])
+        ax1.set_ylabel("kW")
+        ax1.set_title(f"PV vs. simulated usage over the forecast {grid_horizon}, all selected tariffs")
+        ax1.legend(fontsize=8)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    ax1.plot(fitness.soc.t_hr, fitness.soc.pv_kw, label="PV (kW)", color="tab:orange")
-    ax1.plot(fitness.soc.t_hr, fitness.soc.usage_kw, label="Usage (kW)", color="tab:blue")
-    ax1.set_ylabel("kW")
-    ax1.set_title(f"{tariff_for_grid}: PV vs. simulated usage over the forecast {grid_horizon}")
-    ax1.legend()
-    ax2.plot(fitness.soc.t_hr, fitness.soc.actual_soc_pct, label="actual (real battery, [0,100])",
-             color="tab:green")
-    ax2.plot(fitness.soc.t_hr, fitness.soc.socs_pct, label="socs (unbounded, daily-reset)",
-             color="tab:gray", alpha=0.6)
-    ax2.axhline(0, color="black", lw=0.6)
-    ax2.axhline(100, color="black", lw=0.6)
-    ax2.set_ylabel("% of battery capacity")
-    ax2.set_xlabel(f"hour into forecast {grid_horizon}")
-    ax2.legend()
+        for i, (name, fit) in enumerate(fitness_by_tariff.items()):
+            ax2.plot(fit.soc.t_hr, fit.soc.actual_soc_pct, label=name, color=colors[i % len(colors)])
+        ax2.axhline(0, color="black", lw=0.6)
+        ax2.axhline(100, color="black", lw=0.6)
+        ax2.set_ylabel("actual battery charge (%)")
+        ax2.set_xlabel(f"hour into forecast {grid_horizon}")
+        ax2.set_title("Battery state of charge, all selected tariffs")
+        ax2.legend(fontsize=8)
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        st.markdown("###### Fitness, all selected tariffs", unsafe_allow_html=True)
+        rows = [{"tariff": name, "fitness": f.fitness, "battery_preserved": f.battery_preserved,
+                 "demand_met": f.demand_met, "min_battery_pct": f.min_actual_soc_pct,
+                 "deficit_kwh": f.total_deficit_kwh, "surplus_kwh": f.total_surplus_kwh}
+                for name, f in fitness_by_tariff.items()]
+        st.dataframe(pd.DataFrame(rows).sort_values("fitness", ascending=False).reset_index(drop=True),
+                     width="stretch", hide_index=True)
+
+st.markdown(theme.beads(), unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Tariff optimizer: GA search over blends of the five forecast-driven
+# strategies above (TARIFF_STRATEGIES.md section 7 / sim/ga.py)
+# ---------------------------------------------------------------------------
+theme.anchor("ga")
+st.markdown(theme.kanga("Let the search do it", theme.RED) + "  \n### Tariff optimizer (genetic algorithm)",
+            unsafe_allow_html=True)
+st.caption(
+    "TARIFF_STRATEGIES.md section 7: instead of picking one of the five strategies above by hand, "
+    "evolve a *blend* of them (plus two of their own shape parameters) that minimises unmet "
+    "demand, wasted PV, and firewood use -- using exactly the fitness machinery the Grid & battery "
+    "section above uses to score one tariff, just called automatically, many times, as a "
+    "population of candidate blends evolves. Generation 0 is seeded with every pure strategy (and "
+    "flat) as its own individual, so the search's result is never worse than the best single "
+    "heuristic above -- only potentially better.")
+
+with st.expander("GA parameters"):
+    gac1, gac2, gac3 = st.columns(3)
+    with gac1:
+        ga_pop_size = st.slider("Population size", 6, 40, 16, 2, key="ga_pop_size")
+    with gac2:
+        ga_n_generations = st.slider("Max generations", 3, 40, 12, 1, key="ga_n_gen")
+    with gac3:
+        ga_R = st.slider("Monte Carlo days per candidate (R)", 2, 30, 8, 1, key="ga_R",
+                          help="Every candidate in every generation reuses the same R day-seeds "
+                               "(common random numbers, section 7.4) -- higher R makes each "
+                               "fitness evaluation more stable but slower.")
+    gac4, gac5 = st.columns(2)
+    with gac4:
+        ga_n_agents = st.slider("Population (agents)", 20, 200, 60, 10, key="ga_n_agents")
+    with gac5:
+        ga_seed = st.number_input("GA seed", value=0, step=1, key="ga_seed")
+    est_sim_days = ga_pop_size * ga_n_generations * ga_R
+    st.caption(f"Budget at these settings: up to {est_sim_days:,} simulated agent-days "
+               f"({ga_pop_size} pop x {ga_n_generations} gen x {ga_R} R) before convergence or "
+               "patience may stop it early.")
+
+    st.markdown("###### Fitness weights (section 7.3's minimise-me sum)", unsafe_allow_html=True)
+    wc1, wc2, wc3, wc4 = st.columns(4)
+    with wc1:
+        ga_w_def = st.number_input("w_deficit (reliability)", value=1.0, min_value=0.0, step=0.1,
+                                    key="ga_w_def")
+    with wc2:
+        ga_w_sur = st.number_input("w_surplus (waste)", value=0.1, min_value=0.0, step=0.05,
+                                    key="ga_w_sur")
+    with wc3:
+        ga_w_wood = st.number_input("w_wood (adoption)", value=50.0, min_value=0.0, step=5.0,
+                                     key="ga_w_wood",
+                                     help="wood_share is a fraction in [0,1] while deficit/surplus "
+                                          "are kWh magnitudes typically in the tens -- a much "
+                                          "larger weight is what makes the three terms comparable, "
+                                          "not a typo.")
+    with wc4:
+        ga_w_rev = st.number_input("w_revenue (affordability, optional)", value=0.0, min_value=0.0,
+                                    step=5.0, key="ga_w_rev",
+                                    help="Penalises the usage-weighted mean price actually paid "
+                                         "drifting away from the KES 40 flat reference. 0 = off "
+                                         "(the spec's default).")
+
+if st.button("Run GA search", type="primary", key="ga_run_btn"):
+    ga_progress = st.progress(0.0)
+    ga_chart_ph = st.empty()
+    ga_stats_ph = st.empty()
+    ga_history_rows: list[dict] = []
+
+    def _on_ga_generation(info: dict) -> None:
+        ga_progress.progress(min((info["generation"] + 1) / info["n_generations"], 1.0))
+        ga_history_rows.append({"generation": info["generation"], "best fitness": info["best_fitness"],
+                                 "mean fitness": info["mean_fitness"]})
+        ga_chart_ph.line_chart(pd.DataFrame(ga_history_rows).set_index("generation"))
+        with ga_stats_ph.container():
+            gm1, gm2 = st.columns(2)
+            gm1.metric("Generation", f"{info['generation'] + 1}/{info['n_generations']}")
+            gm2.metric("Best fitness so far (lower is better)", f"{info['best_fitness']:.2f}")
+
+    try:
+        with st.spinner("Running GA search (fetches a live PV forecast + runs a reference "
+                         "simulation on first use this session)..."):
+            ga_result = ga_mod.run_ga(
+                pop_size=ga_pop_size, n_generations=ga_n_generations, R=ga_R, n_agents=ga_n_agents,
+                seed=int(ga_seed), w_def=ga_w_def, w_sur=ga_w_sur, w_wood=ga_w_wood, w_rev=ga_w_rev,
+                generation_callback=_on_ga_generation)
+        st.session_state["ga_result"] = ga_result
+        st.success(f"Converged after {ga_result.n_generations_run} generation(s) -- "
+                   f"best fitness {ga_result.best_fitness:.2f}.")
+    except ModuleNotFoundError:
+        st.error("quartz-solar-forecast isn't installed, so the GA can't fetch a live PV forecast. "
+                 "See the Grid & battery section above for install instructions.")
+    except Exception as e:
+        st.error(f"GA run failed ({type(e).__name__}: {e}).")
+
+if "ga_result" in st.session_state:
+    ga_result = st.session_state["ga_result"]
+    st.markdown("#### Winner")
+    st.write(f"**{ga_mod.describe_chromosome(ga_result.best_theta)}**")
+
+    b = ga_result.best_breakdown
+    bm1, bm2, bm3, bm4 = st.columns(4)
+    bm1.metric("Fitness (lower is better)", f"{ga_result.best_fitness:.2f}")
+    bm2.metric("Deficit", f"{b.total_deficit_kwh:.1f} kWh")
+    bm3.metric("Surplus", f"{b.total_surplus_kwh:.1f} kWh")
+    bm4.metric("Wood share", f"{b.wood_share * 100:.1f}%")
+    st.caption(f"Mean price actually paid: KES {b.mean_paid_price_kes:.1f}/kWh (reference flat "
+               f"rate: KES {grid_config.PRICING.P_FLAT:g}/kWh).")
+
+    ga_forecast_day = tariffs_mod._slice_forecast_day(tariffs_mod._cached_forecast(), tariffs_mod.REFERENCE_DAY)
+    ga_soc_day = tariffs_mod._slice_soc_day(tariffs_mod._cached_reference_soc(), tariffs_mod.REFERENCE_DAY)
+    ga_price_kes = ga_mod.price_curve_kes_day(ga_result.best_theta, ga_forecast_day, ga_soc_day)
+    fig, ax = plt.subplots(figsize=(10, 3))
+    ax.step(np.arange(len(ga_price_kes)) * 0.25, ga_price_kes, where="post", color="tab:red", linewidth=2)
+    ax.set_xlabel("hour of day (reference day)")
+    ax.set_ylabel("KES/kWh")
+    ax.set_title("Winning tariff's price curve")
+    ax.set_xlim(0, 24)
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
 
-    st.caption(f"Surplus over the {grid_horizon}: **{fitness.total_surplus_kwh:.1f} kWh** (PV beyond "
-               "what a full battery could store -- not penalised in fitness, see grid_energy's README: "
-               "it could power extra load directly instead of being wasted) &middot; deficit: "
-               f"**{fitness.total_deficit_kwh:.1f} kWh** (unmet demand once the battery was empty).")
-
-    st.markdown(f"###### Compare every swept tariff against this same PV {grid_horizon}",
-                unsafe_allow_html=True)
-    if st.button("Score every swept tariff"):
-        rows = []
-        for name, res in results.items():
-            f = grid_mod.run_grid_for_tariff_result(res, component=grid_component, forecast=grid_forecast,
-                                                       battery_weight=battery_weight,
-                                                       demand_weight=demand_weight)
-            rows.append({"tariff": name, "fitness": f.fitness, "battery_preserved": f.battery_preserved,
-                         "demand_met": f.demand_met, "min_battery_pct": f.min_actual_soc_pct,
-                         "deficit_kwh": f.total_deficit_kwh, "surplus_kwh": f.total_surplus_kwh})
-        st.session_state["grid_board"] = pd.DataFrame(rows).sort_values(
-            "fitness", ascending=False).reset_index(drop=True)
-    if "grid_board" in st.session_state:
-        st.dataframe(st.session_state["grid_board"], width="stretch", hide_index=True)
+    if st.button("Adopt as the ga_optimal tariff", key="ga_adopt_btn"):
+        price_sim = ga_mod.price_curve_sim_5min(ga_result.best_theta, ga_forecast_day, ga_soc_day)
+        saved_path = tariffs_mod.save_ga_optimal(ga_result.best_theta, price_sim)
+        st.success(f"Saved to {saved_path}. 'ga_optimal' is now selectable in the Live model "
+                   "section's Tariffs to sweep picker.")
 
 st.markdown(theme.beads(), unsafe_allow_html=True)
 
@@ -1091,15 +1212,19 @@ w = float(bump_vec[stage_idx])
 eta_t = agent.eta_t_of_t(ex_hour, scenario_obj)
 lam_val = float(lam_vec[stage_idx])
 price_term_1 = -config.TIMING.kappa_price_time * gamma_cost_val * max(ex_price - config.TARIFF.p_bar, 0.0)
-logit = w + eta_t + lam_val + config.HUNGER.alpha0 * hunger + price_term_1
-sig = 1.0 / (1.0 + np.exp(-logit))
-q = sig * config.TIMING.DELTA
+logit_base = w + eta_t + lam_val + config.HUNGER.alpha0 * hunger
+logit_price_sensitive = logit_base + price_term_1
+sig_price_sensitive = 1.0 / (1.0 + np.exp(-logit_price_sensitive))
+q_price_sensitive = sig_price_sensitive * config.TIMING.DELTA
+sig_wood_floor = 1.0 / (1.0 + np.exp(-logit_base))
+q_wood_floor = sig_wood_floor * config.TIMING.DELTA_WOOD_FLOOR
+q = 1.0 - (1.0 - q_price_sensitive) * (1.0 - q_wood_floor)
 
 st.latex(r"hunger = \max(0,\ \bar n(t) - n) + \kappa \cdot \tau")
 st.write(f"= max(0, {nb} - {ex_n}) + {config.HUNGER.kappa:g} x {ex_tau:g}"
          f" = {max(0, nb - ex_n):.3f} + {config.HUNGER.kappa * ex_tau:.3f} = **{hunger:.3f}**")
 
-st.latex(r"logit = w(t) + \eta_t + \lambda_{persona,stage} + \alpha_0 \cdot hunger"
+st.latex(r"logit_{price} = w(t) + \eta_t + \lambda_{persona,stage} + \alpha_0 \cdot hunger"
          r" - \kappa_{price,time} \cdot \gamma_{cost} \cdot (price(t) - \bar p)")
 st.caption(f"price(t) is penalised *relative to* p_bar = {config.TARIFF.p_bar:g}, the "
            "time-average price every candidate tariff is normalised to -- so a flat tariff "
@@ -1109,11 +1234,25 @@ st.write(f"= {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0:g} x 
          f" + (-{config.TIMING.kappa_price_time:g} x {gamma_cost_val:.2f} x "
          f"({ex_price:.2f} - {config.TARIFF.p_bar:g}))"
          f" = {w:.3f} + {eta_t:.3f} + {lam_val:.3f} + {config.HUNGER.alpha0 * hunger:.3f}"
-         f" + {price_term_1:.3f} = **{logit:.3f}**")
+         f" + {price_term_1:.3f} = **{logit_price_sensitive:.3f}**")
 
-st.latex(r"q = \mathrm{sigmoid}(logit) \times DELTA")
-st.write(f"= sigmoid({logit:.3f}) x {config.TIMING.DELTA:g} = {sig:.4f} x {config.TIMING.DELTA:g}"
-         f" = **{q:.4f}** (probability this agent starts cooking in this one 5-minute block)")
+st.latex(r"q_{price} = \mathrm{sigmoid}(logit_{price}) \times DELTA")
+st.write(f"= sigmoid({logit_price_sensitive:.3f}) x {config.TIMING.DELTA:g} = {sig_price_sensitive:.4f} "
+         f"x {config.TIMING.DELTA:g} = **{q_price_sensitive:.4f}**")
+
+st.markdown("###### Plus a price-immune wood-fallback floor")
+st.caption("A second, much weaker pathway: the same logit *without* the price term, capped by a "
+           "far smaller DELTA_WOOD_FLOOR -- 'even at this price, this agent can always fall back to "
+           "free firewood.' Negligible next to a healthy q_price above, but stops an extreme price "
+           "(e.g. the extreme_test tariff) from suppressing cooking altogether rather than just "
+           "electric cooking -- see sim.config.TIMING.DELTA_WOOD_FLOOR's docstring.")
+st.latex(r"q_{wood} = \mathrm{sigmoid}(logit_{price} - price\_term) \times DELTA\_WOOD\_FLOOR")
+st.write(f"= sigmoid({logit_base:.3f}) x {config.TIMING.DELTA_WOOD_FLOOR:g} = {sig_wood_floor:.4f} "
+         f"x {config.TIMING.DELTA_WOOD_FLOOR:g} = **{q_wood_floor:.4f}**")
+
+st.latex(r"q = 1 - (1 - q_{price})(1 - q_{wood})")
+st.write(f"= 1 - (1 - {q_price_sensitive:.4f})(1 - {q_wood_floor:.4f}) = **{q:.4f}** "
+         "(probability this agent starts cooking in this one 5-minute block, via either pathway)")
 
 st.markdown("#### Stage 2 -- which meal (softmax choice)")
 st.caption("Shown regardless of whether Stage 1 fires, to display the full arithmetic.")
@@ -1289,8 +1428,9 @@ st.markdown(
     "different fictional population.\n\n"
     "**Scoring -- two separate goals, two separate metrics.** `clean_cooking_share` pools every "
     "cook event from every one of the R runs for a tariff and divides electric events by the total "
-    "-- a population-and-day-pooled fraction, not a per-agent average (0 events, e.g. under "
-    "extreme_test, scores 0% clean, not 100% -- suppressing cooking altogether isn't clean cooking). "
+    "-- a population-and-day-pooled fraction, not a per-agent average (0 events scores 0% clean, "
+    "not 100% -- suppressing cooking altogether isn't clean cooking; extreme_test mostly redirects "
+    "to wood instead of suppressing cooking outright, see DELTA_WOOD_FLOOR in the glossary above). "
     "`peak_kw` / `load_factor` score the *other* thing these tariffs are meant to do -- flatten the "
     "village's demand curve, not just relocate fuel choice -- as the mean, across runs, of each "
     "day's peak demand and its (average demand / peak demand) ratio (1.0 = perfectly flat). A tariff "

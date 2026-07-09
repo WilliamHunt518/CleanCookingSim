@@ -6,10 +6,15 @@ from sim import config, tariffs
 def test_all_candidates_normalise_to_common_mean():
     """extreme_test is deliberately excluded: it's a sanity-check stress tariff at an elevated
     price *level* (see test_extreme_test_tariff_is_uniformly_elevated), not a realistic candidate
-    reshaped around the same average like the others."""
-    for name, price in tariffs.all_tariffs().items():
-        if name == "extreme_test":
+    reshaped around the same average like the others. The forecast-driven candidates (green_light
+    etc.) are excluded too -- unnormalised by design (TARIFF_STRATEGIES.md section 0.5) and, more
+    to the point, need a live PV forecast to build at all (see test_tariffs_forecast_driven.py,
+    which mocks that out)."""
+    skip = {"extreme_test"} | tariffs.FORECAST_DRIVEN_NAMES
+    for name, fn in tariffs.CANDIDATES.items():
+        if name in skip:
             continue
+        price = fn()
         assert np.isclose(price.mean(), config.TARIFF.p_bar), name
 
 

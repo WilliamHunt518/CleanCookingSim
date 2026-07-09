@@ -31,9 +31,10 @@ def wood_share(result: TariffRunResult) -> float:
 
 def clean_cooking_share(result: TariffRunResult) -> float:
     """Fraction of all eaten meals that were electric (clean), pooled across all runs -- the
-    positive-framed complement of wood_share. Zero events (e.g. the extreme_test tariff, which
-    suppresses cooking altogether) is treated as 0% clean, not 100%: a tariff that stops people
-    cooking at all hasn't achieved clean cooking, it's achieved no cooking."""
+    positive-framed complement of wood_share. Zero events (a tariff/config extreme enough to
+    suppress cooking altogether -- see config.TIMING.DELTA_WOOD_FLOOR's docstring for why even
+    extreme_test doesn't normally reach literally zero) is treated as 0% clean, not 100%: a tariff
+    that stops people cooking at all hasn't achieved clean cooking, it's achieved no cooking."""
     events = result.events_all_runs
     if not events:
         return 0.0

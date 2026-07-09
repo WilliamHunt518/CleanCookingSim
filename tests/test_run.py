@@ -71,14 +71,19 @@ def test_school_and_kiosk_events_scale_by_meals_per_cook():
         assert config.PERSONAS.meals_per_cook["school"] > config.PERSONAS.meals_per_cook["household"]
 
 
-def test_extreme_test_tariff_saturates_toward_almost_no_cooking():
+def test_extreme_test_tariff_saturates_toward_mostly_wood_not_zero():
     """Sanity check that price response saturates at an extreme input (sim/tariffs.py's
-    extreme_test candidate, 5x p_bar) rather than silently no-op'ing: Stage 1 doesn't know which
-    fuel an agent would pick until *after* it fires, so an extreme enough price should crush
-    firing altogether, not just push it toward wood -- meals/day should collapse, not settle at
-    a normal-looking number."""
+    extreme_test candidate, 5x p_bar): firing should collapse heavily, but not all the way to
+    zero -- DELTA_WOOD_FLOOR gives every agent a small, price-immune "free firewood" fallback
+    pathway, so an absurd price redirects cooking to wood rather than suppressing it altogether
+    (which the model used to do before that floor existed, since Stage 1 doesn't know which fuel
+    an agent would pick until *after* it fires -- see DELTA_WOOD_FLOOR's docstring)."""
     results, _ = run.run_sweep(["flat", "extreme_test"], seed=0, R=30, n_agents=40)
     n_flat = len(results["flat"].events_all_runs)
     n_extreme = len(results["extreme_test"].events_all_runs)
     assert n_flat > 0
-    assert n_extreme < 0.1 * n_flat
+    assert 0 < n_extreme < 0.3 * n_flat  # heavy collapse, but not literally zero
+
+    n_wood_extreme = sum(1 for e in results["extreme_test"].events_all_runs
+                          if meals.WOOD_MASK[e.meal_idx0])
+    assert n_wood_extreme / n_extreme > 0.9  # what little cooking remains should be almost all wood

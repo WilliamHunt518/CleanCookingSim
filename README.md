@@ -29,10 +29,10 @@ python generate_model_pdf.py   # writes model_reference.pdf -- equations + every
 
 `streamlit run app.py` opens a local browser dashboard as a single scrolling
 page (no sidebar, no tabs) with a sticky nav -- Map, Live model, Grid &
-battery, Constraints, Menu, Scale, Parameters, Explainability, Field data --
-following the same layout as the project's showcase page (Field data is last
-deliberately: it's real-world ground-truth context, not something to act on
-before the model sections above it):
+battery, Tariff optimizer, Constraints, Menu, Scale, Parameters,
+Explainability, Field data -- following the same layout as the project's
+showcase page (Field data is last deliberately: it's real-world ground-truth
+context, not something to act on before the model sections above it):
 
 - **Live model** -- the one dark section, holding everything that used to
   live in a sidebar plus the old Simulation/Plots tabs: *run configuration*
@@ -51,10 +51,14 @@ before the model sections above it):
   button needed -- 1 day by default (1 HTTP request) since it re-fetches on
   every parameter change; a **Show full week** button switches to a 7-day
   forecast (7 requests) when you want the longer view, with **Back to 1
-  day** to switch back. Pick any swept tariff to see its demand pushed
-  through the battery model: a fitness scorecard, a PV-vs-usage and
-  battery-%-over-time chart, and a one-click table scoring every swept
-  tariff against that same forecast.
+  day** to switch back. Pick any subset of swept tariffs (all, by default)
+  to see one overlaid chart of PV plus every selected tariff's usage, a
+  second overlaid chart of each one's battery state of charge over time, and
+  a fitness table comparing all of them against that same forecast.
+- **Tariff optimizer** -- see "Forecast-driven tariffs & GA search" below.
+  Runs `sim.ga.run_ga` with live per-generation progress (a chart of
+  best/mean fitness), shows the winning blend's price curve and fitness
+  breakdown, and a button to freeze it as the `ga_optimal` tariff.
 - **Parameters** -- where you actually craft a persona: household/school/
   kiosk `gamma` offsets, `gamma_cost`, `kappa_price_time`, `sigma_ind`,
   school/kiosk `lam` overrides, `DELTA`, tariff levels, population size/mix.
@@ -139,13 +143,15 @@ also a fifth, deliberately-not-realistic tariff candidate, `extreme_test`
 (flat, `extreme_test_multiplier`=5x p_bar, opt-in via the "Tariffs to sweep"
 picker): a sanity check that the price response actually saturates at an
 extreme input rather than silently no-op'ing -- at the current
-base_gamma_cost/kappa_price_time it drives cook-start events to exactly zero
-across 100 independent simulated days (not just a low clean_cooking_share --
-Stage 1 doesn't know which fuel an agent would pick until *after* it fires,
-so an extreme enough price suppresses firing altogether rather than
-diverting it to wood). All parameters are still flagged `tbd=True` because
-the new values are themselves guesses, not sourced numbers -- just
-better-calibrated ones.
+base_gamma_cost/kappa_price_time it drives cook-start events down to ~15% of
+`flat`'s total, ~98% of what remains wood (not literally zero -- Stage 1
+doesn't know which fuel an agent would pick until *after* it fires, so a
+naive price gate used to suppress firing altogether rather than diverting it
+to wood; `config.TIMING.DELTA_WOOD_FLOOR` now gives every agent a small,
+price-immune "free firewood fallback" pathway so an absurd price redirects
+cooking rather than erasing it, see that parameter's docstring). All
+parameters are still flagged `tbd=True` because the new values are
+themselves guesses, not sourced numbers -- just better-calibrated ones.
 
 ## Realism noise and institutional scale
 
@@ -187,8 +193,10 @@ on the other:
 
 - **`clean_cooking_share`** -- the fraction of all meals (pooled across every
   Monte Carlo run) cooked electric rather than on fire. Higher is better. A
-  tariff with zero cook events (e.g. `extreme_test`) scores 0%, not 100% --
-  suppressing cooking altogether isn't clean cooking.
+  tariff with zero cook events scores 0%, not 100% -- suppressing cooking
+  altogether isn't clean cooking (in practice `extreme_test` scores low but
+  nonzero, since it mostly redirects to wood rather than suppressing cooking
+  outright -- see `DELTA_WOOD_FLOOR`).
 - **`peak_kw` / `load_factor`** -- these tariffs are also meant to flatten
   the village's demand curve, not just relocate fuel choice. `peak_kw` is
   the mean, across runs, of each day's peak aggregate demand; `load_factor`
@@ -248,6 +256,53 @@ internet access; `sim/grid.py` and its tests never require this (they use a
 manually-constructed `ForecastResult`, the same injection pattern
 `grid_energy/tests/` uses).
 
+## Forecast-driven tariffs & GA search (`TARIFF_STRATEGIES.md`)
+
+Five more `CANDIDATES` entries, implementing the design in
+`TARIFF_STRATEGIES.md` (a colleague's spec -- read it for the full formulas
+and edge-case reasoning): `green_light` (two-tier discount whenever forecast
+PV would overflow the battery), `pv_following_real` (continuous,
+generation-indexed, the real-forecast counterpart of `solar_following`),
+`soc_banded` (three-band pricing on the battery's actual charge level),
+`residual_load` (prices the net PV-minus-usage residual, distinguishing
+PV-covered usage from usage that must be drawn from the battery), and
+`deficit_guard` (a scarcity surcharge that starts *before* a forecast
+deficit, not after, since a deficit at block `t` is caused by drain before
+`t`). `grid_energy/pricing.py` has the pure KES/kWh price-curve math (no
+`sim` imports); `sim/tariffs.py`'s adapters bridge resolution (one day's
+15-min forecast slice, upsampled x3 to sim's 5-min blocks) and units
+(`KES_PER_SIM_UNIT=160`, calibrated so KES 40 flat ≡ `p_bar`=0.25 -- feeding
+raw KES into sim would silently scale `base_gamma_cost`/`kappa_price_time`'s
+calibration ~160x). All five need a live PV forecast, and four of them
+(everything but `pv_following_real`) also need a day-ahead usage estimate --
+built once from a reference `sim.run.simulate_day` under `flat`, decoupled
+from whatever population an actual sweep uses (the "usage chicken-and-egg,"
+`TARIFF_STRATEGIES.md` section 0.7). Both are fetched/computed at most once
+per process (`sim.tariffs.reset_forecast_driven_cache()` forces a refetch)
+and kept out of the default "Tariffs to sweep" selection the same way
+`extreme_test` is, so a normal Run simulation never silently depends on
+network access.
+
+**`sim/ga.py`** implements section 7's genetic-algorithm search: instead of
+picking one strategy shape by hand, evolve a population of *blends* of all
+five (plus two of their own parameters -- `pv_following_real`'s `gamma`,
+`soc_banded`'s `theta_hi` -- a 7-gene chromosome) that minimises unmet
+demand, wasted PV, and firewood use. Generation 0 is seeded with every pure
+strategy and flat as its own individual (a literal corner of the blend-weight
+search space), which is what guarantees the search's result is never worse
+than the best single heuristic, only potentially better. Every candidate,
+across the *entire* run, is evaluated against the same fixed population and
+Monte Carlo day-seeds (common random numbers, section 7.4) -- fitness is a
+deterministic function of the chromosome, so there's no need to estimate a
+noise floor for convergence, and two runs with the same seed are bit-for-bit
+reproducible. `app.py`'s "Tariff optimizer" section (or
+`sim.ga.run_ga(...)` directly) runs the search with live progress
+(best/mean fitness per generation); "Adopt as the ga_optimal tariff" freezes
+the winning price array to `out/ga_optimal_tariff.json`
+(`sim.tariffs.save_ga_optimal`) so `ga_optimal` becomes a normal, instant
+`CANDIDATES` entry -- the search's output is *produced offline*, never
+recomputed at simulation time (section 7.7).
+
 ## Ablation tuning workflow
 
 This is the order to sanity-check the model when something looks wrong, or
@@ -296,19 +351,22 @@ of `app.py`, or directly in `config.py`).
 ```
 sim/config.py      all parameters: value, units, meaning, tbd flag
 sim/meals.py       meal table (K=18), power profiles phi_k, duration sampler
-sim/tariffs.py     flat / evening_peak / solar_following / extreme_test, PV stub, normalisation
+sim/tariffs.py     flat / evening_peak / solar_following / extreme_test + five forecast-driven
+                   candidates (green_light etc.) + ga_optimal, PV stub, normalisation
 sim/agent.py       pure functions: fire (hazard), which (softmax choice), update
 sim/population.py  personas (household/school/kiosk), individual sampling
 sim/run.py         day loop, Monte Carlo sweep, demand assembly
 sim/score.py       clean_cooking_share, peak_kw, load_factor, scoreboard
 sim/grid.py        sim -> grid_energy: tariff demand -> PV/battery fitness, evaluate_tariff API
+sim/ga.py          genetic-algorithm search over blends of the five forecast-driven tariffs
 sim/plots.py       the seven output figures
 sim/cli.py         explain / audit / run subcommands
 prism_export.py    exports one persona as a PRISM .pm/.props model, and validates it against
                    sim.run (compute_exact_properties vs. monte_carlo_comparison)
-grid_energy/       real PV forecast + battery SOC model, standalone (see its own README.md)
+grid_energy/       real PV forecast + battery SOC model, standalone (see its own README.md);
+                   pricing.py has the five forecast-driven strategies' pure price-curve math
 tests/             pytest -- softmax direction, hunger dynamics, stage windows,
-                   energy conservation, tariff normalisation, reproducibility, grid fitness
+                   energy conservation, tariff normalisation, reproducibility, grid fitness, GA
 ```
 
 ## What this deliberately does not model

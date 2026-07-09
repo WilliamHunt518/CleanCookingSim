@@ -125,6 +125,8 @@ class FireResult:
     alpha0_hunger: np.ndarray  # (N,) = alpha0_eff * hunger (the logit contribution)
     price_term: np.ndarray  # (N,) = -kappa_price_time * gamma_cost * price(t) (the logit contribution)
     noise: np.ndarray       # (N,) ~ Normal(0, sigma_logit_noise), redrawn every block (the logit contribution)
+    q_price_sensitive: np.ndarray  # (N,) firing probability from the normal, price_term-included pathway alone
+    q_wood_floor: np.ndarray       # (N,) firing probability from the price-immune "free wood fallback" pathway alone
 
 
 def fire(state: AgentState, t_hr: float, population, scenario, price_t: float, rng: np.random.Generator,
@@ -184,13 +186,24 @@ def fire(state: AgentState, t_hr: float, population, scenario, price_t: float, r
     # lam/hunger/price, so a large population synchronises into an almost perfectly clean,
     # razor-sharp peak with dead silence between meal times. This is what breaks that up.
     noise = rng.normal(0.0, config.TIMING.sigma_logit_noise, size=n_agents)
-    logit = w + eta_t + lam + alpha0_hunger + price_term + noise
-    q = sigmoid(logit) * config.TIMING.DELTA
+    logit_base = w + eta_t + lam + alpha0_hunger + noise
+    q_price_sensitive = sigmoid(logit_base + price_term) * config.TIMING.DELTA
+    # Price-immune "free firewood fallback" pathway: the same propensity to cook (hunger, timing,
+    # persona habit) but with price_term forced to 0 -- an agent priced out of electric cooking can
+    # still cook on wood, which grid tariffs don't touch. Capped by a much smaller DELTA_WOOD_FLOOR
+    # (see its docstring) so this pathway is negligible next to a normal, un-suppressed
+    # q_price_sensitive and only matters once price crushes that pathway toward 0 -- e.g.
+    # extreme_test's 5x p_bar, which used to suppress cooking altogether (wood included) rather
+    # than just electric cooking, since Stage 1 has no idea what fuel Stage 2 will pick.
+    q_wood_floor = sigmoid(logit_base) * config.TIMING.DELTA_WOOD_FLOOR
+    # Independent union, not max/sum: an agent fires if EITHER pathway's own (unobserved) coin
+    # flip would fire -- P(A or B) = 1 - P(not A)*P(not B) for independent A, B.
+    q = 1.0 - (1.0 - q_price_sensitive) * (1.0 - q_wood_floor)
     fired = (rng.random(n_agents) < q) & eligible
 
     return FireResult(fired=fired, eligible=eligible, stage_idx=stage_idx, q=q, w=w, eta_t=eta_t,
                        lam=lam, hunger=hunger, alpha0_hunger=alpha0_hunger, price_term=price_term,
-                       noise=noise)
+                       noise=noise, q_price_sensitive=q_price_sensitive, q_wood_floor=q_wood_floor)
 
 
 @dataclass

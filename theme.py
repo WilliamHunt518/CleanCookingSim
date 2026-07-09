@@ -298,7 +298,7 @@ def inject() -> None:
 
 
 _NAV_SECTIONS = [
-    ("village", "Map"), ("live", "Live model"), ("grid", "Grid & battery"),
+    ("village", "Map"), ("live", "Live model"), ("grid", "Grid & battery"), ("ga", "Tariff optimizer"),
     ("constraints", "Constraints"), ("menu", "Menu"), ("scale", "Scale"),
     ("parameters", "Parameters"), ("explain", "Explainability"), ("evidence", "Field data"),
 ]

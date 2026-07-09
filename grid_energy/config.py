@@ -37,7 +37,25 @@ class TimeConfig:
     T: int = 288                     # 24h / 5min blocks
 
 
+@dataclass(frozen=True)
+class PricingConfig:
+    """Shared parameters for the forecast-driven tariff strategies in pricing.py (see
+    TARIFF_STRATEGIES.md sections 0.4/0.6). Prices here are real-world KES/kWh -- sim.tariffs'
+    adapters convert to sim's internal currency units before registering a CANDIDATES entry."""
+    P_MIN: float = 0.0                # KES/kWh, hard price floor every strategy clamps to
+    P_MAX: float = 80.0               # KES/kWh, hard price ceiling every strategy clamps to
+    P_FLAT: float = 40.0              # KES/kWh, current real flat rate (Oloika prepay), reference level
+    P_DISC: float = 30.0              # KES/kWh, discounted tier (paper's actual Green Light Hours rate)
+    # KES per sim-unit: sim's internal price scale is calibrated against p_bar=0.25 representing
+    # the real KES 40 flat rate, so sim_price = kes_price / KES_PER_SIM_UNIT. KES [0, 80] then
+    # maps to sim [0, 0.50] -- inside the calibrated [p_lo=0.05, p_hi=0.60] envelope. Load-bearing,
+    # not cosmetic: feeding raw KES into sim would scale base_gamma_cost/kappa_price_time's
+    # calibrated price sensitivity ~160x and destroy it (see TARIFF_STRATEGIES.md section 0.4).
+    KES_PER_SIM_UNIT: float = 160.0
+
+
 SITE = SiteConfig()
 PV = PVConfig()
 BATTERY = BatteryConfig()
 TIME = TimeConfig()
+PRICING = PricingConfig()

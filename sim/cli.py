@@ -56,7 +56,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     n_tbd = len(config.tbd_params())
     print(f"NOTE: {n_tbd} parameters are placeholder guesses -- run `python -m sim audit` to list them.\n")
 
-    tariff_names = args.tariffs or list(tariffs_mod.CANDIDATES.keys())
+    # Default (no --tariffs) excludes the forecast-driven candidates (green_light etc.) the same
+    # way it always excluded nothing before them -- except these need a live PV forecast (internet
+    # + quartz-solar-forecast installed), so `python -m sim run` with no args shouldn't silently
+    # start depending on network access. Pass them explicitly via --tariffs to opt in.
+    tariff_names = args.tariffs or [t for t in tariffs_mod.CANDIDATES if t not in tariffs_mod.FORECAST_DRIVEN_NAMES]
     results, population = run_mod.run_sweep(
         tariff_names, scenario_name=args.scenario, seed=args.seed, R=args.R, n_agents=args.n_agents,
         no_hunger=args.no_hunger, no_cost=args.no_cost, no_personas=args.no_personas,

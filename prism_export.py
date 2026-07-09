@@ -81,7 +81,7 @@ def _fire_prob(h: list[int], tau_hr: float, t_hr: float, lam_vec: np.ndarray,
     # identically 0 here -- see sim.agent.fire's docstring comment for why it's centered on p_bar
     # and clipped to never reward a below-average price, only penalise an above-average one.
     price_term = -config.TIMING.kappa_price_time * gamma_cost * max(PRICE_FLAT - config.TARIFF.p_bar, 0.0)
-    logit = w + lam_vec[stage_idx] + config.HUNGER.alpha0 * hunger + price_term
+    logit_base = w + lam_vec[stage_idx] + config.HUNGER.alpha0 * hunger
     # DELTA is calibrated for sim.agent.fire's native 5-minute block (config.STATE.block_minutes) --
     # q_fine is "the probability of firing in one such 5-minute block." Using q_fine directly as
     # this 30-minute block's firing probability would silently give an agent only 1/BLOCKS_PER_COARSE
@@ -91,7 +91,15 @@ def _fire_prob(h: list[int], tau_hr: float, t_hr: float, lam_vec: np.ndarray,
     # Converting via "probability of at least one fire in BLOCKS_PER_COARSE independent fine blocks"
     # (assuming the hazard logit is ~constant across those 6 sub-blocks, a reasonable coarse-graining
     # approximation) keeps this export's firing rate consistent with the real, finer-grained model.
-    q_fine = 1.0 / (1.0 + np.exp(-logit)) * config.TIMING.DELTA
+    #
+    # Mirrors sim.agent.fire's two-pathway union (see DELTA_WOOD_FLOOR's docstring): a normal,
+    # price-sensitive pathway and a smaller, price-immune "free wood fallback" pathway, combined as
+    # an independent union rather than added/maxed. price_term is 0 here (PRICE_FLAT == p_bar
+    # always), so this mostly keeps this export numerically identical to the real simulator rather
+    # than modelling any actual price effect in this always-flat context.
+    q_price_sensitive_fine = 1.0 / (1.0 + np.exp(-(logit_base + price_term))) * config.TIMING.DELTA
+    q_wood_floor_fine = 1.0 / (1.0 + np.exp(-logit_base)) * config.TIMING.DELTA_WOOD_FLOOR
+    q_fine = 1.0 - (1.0 - q_price_sensitive_fine) * (1.0 - q_wood_floor_fine)
     q = float(1.0 - (1.0 - q_fine) ** BLOCKS_PER_COARSE)
     return stage_idx, q, hunger
 

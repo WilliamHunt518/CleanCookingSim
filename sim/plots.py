@@ -182,7 +182,14 @@ def plot_events_over_time(results: dict[str, TariffRunResult], out_dir: str = "o
 
 def build_meal_type_over_time_figure(results: dict[str, TariffRunResult]) -> plt.Figure:
     """Fire-only share of meals per hour of day, one line per tariff -- shows whether a tariff's
-    price signal swaps meal *type* at a given hour rather than (or as well as) moving its timing."""
+    price signal swaps meal *type* at a given hour rather than (or as well as) moving its timing.
+
+    Hours with zero events for a tariff are left as gaps (NaN), not plotted as 0% -- a tariff that
+    suppresses cooking altogether at some hour (extreme_test routinely has a few such hours even
+    with DELTA_WOOD_FLOOR's fallback, see its docstring) has no meal type to report there, and
+    0%/100% would misleadingly read as "all electric" when the truth is "nobody cooked anything."
+    See build_events_over_time_figure for the companion chart that shows *whether* anyone cooked at
+    all -- read the two together, not this one alone."""
     fig, ax = plt.subplots(figsize=(10, 4))
     bins = np.arange(0, 24.01, 1.0)
     centers = (bins[:-1] + bins[1:]) / 2
@@ -191,7 +198,12 @@ def build_meal_type_over_time_figure(results: dict[str, TariffRunResult]) -> plt
         is_fire = np.array([meals.WOOD_MASK[e.meal_idx0] for e in result.events_all_runs], dtype=bool)
         total, _ = np.histogram(starts_hr, bins=bins)
         wood, _ = np.histogram(starts_hr[is_fire], bins=bins)
-        share = np.divide(wood, total, out=np.zeros_like(wood, dtype=float), where=total > 0)
+        share = np.full(len(centers), np.nan)
+        has_events = total > 0
+        share[has_events] = wood[has_events] / total[has_events]
+        if not np.any(has_events):
+            ax.plot([], [], label=f"{name} (no cook events at all)", linewidth=2)
+            continue
         ax.plot(centers, share * 100, label=name, linewidth=2, marker="o", markersize=4)
     for lo, hi in [config.TARIFF.w_peak_hr]:
         ax.axvspan(lo, hi, color="tab:red", alpha=0.06, label="evening_peak window")

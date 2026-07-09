@@ -48,6 +48,7 @@ def _trace_row(idx: int, t_block: int, t_hr: float, state: agent.AgentState,
         "w": float(fr.w[idx]), "eta_t": float(fr.eta_t), "lam": float(fr.lam[idx]),
         "alpha0_hunger": float(fr.alpha0_hunger[idx]), "price_term": float(fr.price_term[idx]),
         "noise": float(fr.noise[idx]), "q": float(fr.q[idx]), "fired": bool(fr.fired[idx]),
+        "q_price_sensitive": float(fr.q_price_sensitive[idx]), "q_wood_floor": float(fr.q_wood_floor[idx]),
     }
     if fr.fired[idx]:
         choice = int(wh.choice[idx])

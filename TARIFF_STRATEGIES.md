@@ -1,10 +1,18 @@
 # Forecast-driven tariff strategies — design spec
 
 Formulations for five forecast-driven tariff candidates (A-E) plus a genetic-
-algorithm search for near-optimal pricing. **This is a design document — none
-of it is implemented yet.** It exists so that, when the end-to-end simulation
-is ready, each strategy can be added to `sim/tariffs.py` mechanically, with
-every formula, parameter, unit conversion, and edge case already decided.
+algorithm search for near-optimal pricing. **Implemented** -- `grid_energy/
+pricing.py` has strategies A-E's price-curve math, `sim/tariffs.py` has the
+resolution/unit bridge adapters (registered in `CANDIDATES` as `green_light`,
+`pv_following_real`, `soc_banded`, `residual_load`, `deficit_guard`), and
+`sim/ga.py` has the GA search (section 7), with a live UI in `app.py`'s
+"Tariff optimizer" section. This document is kept as the design rationale --
+every formula, parameter, unit conversion, and edge case's *reasoning* --
+rather than duplicated into docstrings; see the top-level `README.md`'s
+"Forecast-driven tariffs & GA search" section for a short pointer into the
+actual code, and each module's own docstrings for implementation-level notes
+(e.g. where an implementation choice diverged from or filled in a gap left
+open here, like the GA's blend-of-strategies chromosome encoding).
 
 Companion docs: `COMPONENT_API.md` (the `GridEnergyComponent` API these
 strategies consume) and `README.md` (the SOC model itself).
