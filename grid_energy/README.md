@@ -3,6 +3,11 @@
 Module estimating how much energy the mini-grid has available, combining a
 real PV forecast, agent usage, and battery capacity.
 
+This file explains the *reasoning* (why the equation is unbounded, why only
+one tracker resets daily, why PV comes from a real forecast). For a complete
+parameter-by-parameter reference of the callable API (`GridEnergyComponent`
+and everything it returns), see **[`COMPONENT_API.md`](COMPONENT_API.md)**.
+
 ## The equation, reformulated
 
 You proposed:
@@ -123,18 +128,40 @@ already-mutated `capacity_kwp=4`, silently skipped rescaling, and returned a
 forecast for a 4 kWp system while claiming to be for the real (much larger)
 one. Covered by `test_forecast_day_builds_a_fresh_site_every_call`.
 
-## Usage
+## Using this as a component (e.g. from `sim`, later)
 
-`usage_kw` is left as a plain input timeseries -- this module doesn't
-generate it. `demo_forecast_week.py` builds a full week: real PV(t) from
-`quartz_forecast.py` against one `sim.run.simulate_day` cooking day
-(resampled 5-min -> 15-min and tiled x7 -- `sim` only simulates a single
-Monte Carlo day, it has no day-to-day/weekday-weekend variation built in).
-`sim.config.N_AGENTS=100`'s default population produces ~287 kWh/day of
-cooking demand, well above this plant's scale, so this demo defaults
-`--n-agents 18` to bring `sim`'s demand down to a comparable order of
-magnitude; it is still an illustration of the equation's mechanics, not a
-calibrated usage forecast.
+`GridEnergyComponent` (`component.py`) is the single entry point this folder
+is meant to be driven through by anything outside it. `grid_energy` still
+imports nothing from `sim` -- the intended direction is `sim -> grid_energy`,
+never the reverse, so wiring it in later is additive, not a refactor of
+either side:
+
+```python
+from grid_energy import GridEnergyComponent
+
+component = GridEnergyComponent()                            # Oloika defaults, see config.py
+day = sim.run.simulate_day(population, price, scenario, rng)  # sim's own 5-min-block demand_kw
+result = component.compute_soc_for_usage(day.demand_kw, usage_block_minutes=5.0)
+
+result.socs_pct        # today's surplus/deficit, % of BC, unbounded, resets daily
+result.actual_soc_pct  # the real battery, % of BC, [0, 100], carries over continuously
+result.surplus_kwh     # per-block energy beyond what the battery could store
+result.deficit_kwh     # per-block unmet demand once the battery was empty
+```
+
+`usage_kw` can be at *any* fixed block size -- `compute_soc_for_usage`
+resamples it to `quartz_forecast`'s native 15-minute resolution
+(`resample.py`: averages on downsampling, repeats on upsampling, so mean
+power is preserved either way) and tiles/truncates it to the forecast's
+length (e.g. one simulated day repeated across a week). This is exactly the
+`weekly_usage_kw_from_sim`/manual-reshape logic `demo_forecast_week.py` used
+to do inline, now behind one reusable method so a future `sim` caller
+doesn't have to reimplement it.
+
+`GridEnergyComponent()` with no arguments uses `config.SITE`/`config.PV`/
+`config.BATTERY`'s Oloika defaults; every field (`latitude`, `longitude`,
+`capacity_kwp`, `capacity_kwh`, `soc_init_pct`, `nwp_source`) can be
+overridden per instance for a different scenario without touching `config.py`.
 
 ## Files
 
@@ -142,8 +169,11 @@ calibrated usage forecast.
 grid_energy/config.py             site / PV / battery / timing parameters + Oloika defaults
 grid_energy/quartz_forecast.py    PV(t) from quartz-solar-forecast, real weekly 15-min forecast
 grid_energy/soc.py                socs(t) -- the core equation, unbounded + clipped variants, daily reset
+grid_energy/resample.py           block-size resampling + tiling (5-min sim <-> 15-min forecast)
+grid_energy/component.py          GridEnergyComponent -- the single entry point, see above
 grid_energy/demo_forecast_week.py runnable example + plot, one real week: python -m grid_energy.demo_forecast_week
-grid_energy/tests/                pytest -- conservation, >100%/<0% behaviour, clipping bounds, daily reset, forecast wiring
+grid_energy/tests/                pytest -- conservation, >100%/<0% behaviour, clipping bounds, daily reset, forecast wiring, resampling, component
+grid_energy/COMPONENT_API.md      complete parameter-by-parameter API reference (types, units, errors, worked examples)
 ```
 
 ## Run it
@@ -152,7 +182,7 @@ grid_energy/tests/                pytest -- conservation, >100%/<0% behaviour, c
 pip install quartz-solar-forecast              # needs Python <=3.11, see above
 
 python -m grid_energy.quartz_forecast --plot    # real weekly PV forecast only, prints a summary + PNG
-python -m grid_energy.demo_forecast_week        # real weekly PV forecast + sim usage -> socs(t)
+python -m grid_energy.demo_forecast_week        # GridEnergyComponent worked example: PV forecast + sim usage -> socs(t)
 python -m pytest grid_energy/tests -v
 ```
 

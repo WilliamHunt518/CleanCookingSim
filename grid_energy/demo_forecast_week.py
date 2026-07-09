@@ -1,17 +1,23 @@
 """
 Runnable demo: python -m grid_energy.demo_forecast_week [--seed N]
 
-Pulls one real week of PV(t) at 15-minute resolution from quartz-solar-forecast
-(see quartz_forecast.py) for the Oloika site (grid_energy.config.SITE and
-.PV/.BATTERY), builds a matching week of Usage(t) by repeating one simulated
-cooking day (sim.run.simulate_day, resampled from 5-min to 15-min blocks)
-seven times, and runs soc.compute_soc over the full week with its default
-reset_daily=True -- the real battery (actual_soc_pct) carries its charge
-continuously across the whole week, it is never reset; only socs_pct (the
-unbounded "how much surplus/deficit did today produce") restarts each day
-from wherever the real battery actually is that morning, so the per-day
-figures in the printed table read as that day's own balance, not a running
-week-to-date total (see soc.py's docstring for why).
+A worked example of GridEnergyComponent (component.py) -- the interface a
+future sim integration would use. Pulls one real week of PV(t) at 15-minute
+resolution from quartz-solar-forecast for the Oloika site (grid_energy.
+config.SITE/.PV/.BATTERY), builds a week of Usage(t) from one simulated
+cooking day (sim.run.simulate_day, at sim's native 5-minute blocks), and
+calls component.compute_soc_for_usage(...) to resample/tile/align it against
+the PV forecast and run soc.compute_soc -- exactly what sim would do later,
+just driven from this demo script instead of from inside sim itself (nothing
+in grid_energy imports sim; this file is a consumer, not the reverse).
+
+reset_daily=True (compute_soc's default, used here): the real battery
+(actual_soc_pct) carries its charge continuously across the whole week, it
+is never reset; only socs_pct (the unbounded "how much surplus/deficit did
+today produce") restarts each day from wherever the real battery actually is
+that morning, so the per-day figures in the printed table read as that day's
+own balance, not a running week-to-date total (see soc.py's docstring for
+why).
 
 Repeating a single simulated day for all 7 days is a deliberate simplification
 -- sim only simulates one Monte Carlo day at a time and has no day-to-day
@@ -25,24 +31,22 @@ import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-from . import config, quartz_forecast, soc as soc_mod
+from . import config
+from .component import GridEnergyComponent
+from .quartz_forecast import BLOCK_MINUTES, BLOCKS_PER_DAY
 
 
-def weekly_usage_kw_from_sim(seed: int, n_agents: int) -> np.ndarray:
-    """One simulated cooking day (5-min blocks) resampled to 15-min blocks by
-    averaging each consecutive triple, then tiled 7x to fill a week."""
+def one_day_usage_kw_from_sim(seed: int, n_agents: int) -> tuple[np.ndarray, float]:
+    """One simulated cooking day's aggregate demand, at sim's own (5-min) block size --
+    returned un-resampled; GridEnergyComponent handles resolution-matching."""
     from sim import config as sim_config, population as population_mod, run as run_mod, tariffs as tariffs_mod
 
     rng = np.random.default_rng(seed)
     population = population_mod.build_population(rng, n_agents=n_agents)
     price = tariffs_mod.build_tariff("flat")
     day = run_mod.simulate_day(population, price, sim_config.REFERENCE_SCENARIO, rng)
-
-    demand_5min = day.demand_kw  # 288 blocks
-    demand_15min = demand_5min.reshape(-1, 3).mean(axis=1)  # 96 blocks
-    return np.tile(demand_15min, 7)  # 672 blocks
+    return day.demand_kw, sim_config.STATE.block_minutes
 
 
 def main() -> None:
@@ -56,16 +60,15 @@ def main() -> None:
     ap.add_argument("--out", default="grid_energy/out_socs_week.png")
     args = ap.parse_args()
 
-    forecast = quartz_forecast.forecast_week_kw()
+    component = GridEnergyComponent()
+    forecast = component.forecast_pv_week()
     pv_kw = forecast.power_kw.to_numpy()
-    usage_kw = weekly_usage_kw_from_sim(args.seed, args.n_agents)
 
-    # reset_daily=True (compute_soc's default): socs_pct/surplus_kwh/deficit_kwh each snap back
-    # to soc_init_pct at every day boundary, so they read as "this day's own balance", not a
-    # running week-to-date total -- see soc.py's docstring.
-    result = soc_mod.compute_soc(pv_kw, usage_kw, block_minutes=quartz_forecast.BLOCK_MINUTES)
-    t_days = np.arange(len(pv_kw)) * (quartz_forecast.BLOCK_MINUTES / 60.0) / 24.0
-    blocks_per_day = quartz_forecast.BLOCKS_PER_DAY
+    usage_5min, usage_block_minutes = one_day_usage_kw_from_sim(args.seed, args.n_agents)
+    result = component.compute_soc_for_usage(usage_5min, usage_block_minutes, forecast=forecast)
+
+    t_days = np.arange(len(pv_kw)) * (BLOCK_MINUTES / 60.0) / 24.0
+    blocks_per_day = BLOCKS_PER_DAY
     dates = forecast.power_kw.index[::blocks_per_day].date
 
     print(f"forecast window       : {forecast.power_kw.index[0]} .. {forecast.power_kw.index[-1]}")
@@ -73,13 +76,13 @@ def main() -> None:
           f"{'surplus kWh':>13}{'deficit kWh':>13}")
     for d, date in enumerate(dates):
         sl = slice(d * blocks_per_day, (d + 1) * blocks_per_day)
-        pv_day_kwh = pv_kw[sl].sum() * quartz_forecast.BLOCK_MINUTES / 60
-        usage_day_kwh = usage_kw[sl].sum() * quartz_forecast.BLOCK_MINUTES / 60
+        pv_day_kwh = result.pv_kw[sl].sum() * BLOCK_MINUTES / 60
+        usage_day_kwh = result.usage_kw[sl].sum() * BLOCK_MINUTES / 60
         print(f"{str(date):<12}{pv_day_kwh:>10.2f}{usage_day_kwh:>12.2f}"
               f"{result.socs_pct[sl].max():>12.1f}{result.actual_soc_pct[sl].min():>11.1f}"
               f"{result.surplus_kwh[sl].sum():>13.2f}{result.deficit_kwh[sl].sum():>13.2f}")
-    print(f"{'week total':<12}{pv_kw.sum() * quartz_forecast.BLOCK_MINUTES / 60:>10.2f}"
-          f"{usage_kw.sum() * quartz_forecast.BLOCK_MINUTES / 60:>12.2f}{'':>12}{'':>11}"
+    print(f"{'week total':<12}{result.pv_kw.sum() * BLOCK_MINUTES / 60:>10.2f}"
+          f"{result.usage_kw.sum() * BLOCK_MINUTES / 60:>12.2f}{'':>12}{'':>11}"
           f"{result.surplus_kwh.sum():>13.2f}{result.deficit_kwh.sum():>13.2f}"
           f"   <- sum of each day's own surplus/deficit, not a running week-to-date balance")
 
